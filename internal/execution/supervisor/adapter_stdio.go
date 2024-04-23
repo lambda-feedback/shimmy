@@ -4,26 +4,27 @@ import (
 	"context"
 	"errors"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/models"
 	"github.com/lambda-feedback/shimmy/internal/execution/worker"
 	"go.uber.org/zap"
 )
 
-type stdioAdapter[I, O any] struct {
-	worker worker.Worker[I, O]
+type stdioAdapter[I, M, O any] struct {
+	worker worker.Worker[I, M, O]
 
 	log *zap.Logger
 }
 
-func newStdioAdapter[I, O any](log *zap.Logger) *stdioAdapter[I, O] {
-	worker := worker.NewProcessWorker[I, O](log)
+func newStdioAdapter[I, M, O any](log *zap.Logger) *stdioAdapter[I, M, O] {
+	worker := worker.NewProcessWorker[I, M, O](log)
 
-	return &stdioAdapter[I, O]{
+	return &stdioAdapter[I, M, O]{
 		worker: worker,
 		log:    log,
 	}
 }
 
-func (a *stdioAdapter[I, O]) Start(ctx context.Context, params worker.StartConfig) error {
+func (a *stdioAdapter[I, M, O]) Start(ctx context.Context, params worker.StartConfig) error {
 	if a.worker == nil {
 		return errors.New("no worker provided")
 	}
@@ -38,9 +39,9 @@ func (a *stdioAdapter[I, O]) Start(ctx context.Context, params worker.StartConfi
 	return nil
 }
 
-func (a *stdioAdapter[I, O]) Send(
+func (a *stdioAdapter[I, M, O]) Send(
 	ctx context.Context,
-	data I,
+	data models.Message[I, M],
 	params worker.SendConfig,
 ) (O, error) {
 	var res O
@@ -59,7 +60,7 @@ func (a *stdioAdapter[I, O]) Send(
 	return res, nil
 }
 
-func (a *stdioAdapter[I, O]) Stop(
+func (a *stdioAdapter[I, M, O]) Stop(
 	ctx context.Context,
 	params worker.StopConfig,
 ) (WaitFunc, error) {

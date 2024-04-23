@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/models"
 	"go.uber.org/zap"
 )
 
@@ -19,49 +20,41 @@ type ExitEvent struct {
 	Signal *int32
 }
 
-type Message[T any] struct {
-	// ID is the message identifier
-	ID int `json:"id"`
-
-	// Data is the message payload
-	Data T `json:"data"`
-}
-
-type Worker[I any, O any] interface {
+type Worker[I, M, O any] interface {
 	Start(context.Context, StartConfig) error
 	Terminate() error
 	// Kill(StopParams) error
 	Read(context.Context, ReadConfig) (O, error)
-	Write(context.Context, I) error
-	Send(context.Context, I, SendConfig) (O, error)
+	Write(context.Context, models.Message[I, M]) error
+	Send(context.Context, models.Message[I, M], SendConfig) (O, error)
 	Wait(context.Context) (ExitEvent, error)
 	WaitFor(context.Context, time.Duration) (ExitEvent, error)
 }
 
-type ProcessWorker[I any, O any] struct {
+type ProcessWorker[I, M, O any] struct {
 	processLock sync.Mutex
-	process     *proc[I, O]
+	process     *proc[I, M, O]
 	exitChan    chan ExitEvent
 	log         *zap.Logger
 }
 
-func NewProcessWorker[I, O any](log *zap.Logger) *ProcessWorker[I, O] {
-	return &ProcessWorker[I, O]{
+func NewProcessWorker[I, M, O any](log *zap.Logger) *ProcessWorker[I, M, O] {
+	return &ProcessWorker[I, M, O]{
 		log: log,
 	}
 }
 
-var _ Worker[any, any] = (*ProcessWorker[any, any])(nil)
+var _ Worker[any, any, any] = (*ProcessWorker[any, any, any])(nil)
 
 // Start starts the worker process.
-func (w *ProcessWorker[I, O]) Start(ctx context.Context, config StartConfig) error {
+func (w *ProcessWorker[I, M, O]) Start(ctx context.Context, config StartConfig) error {
 	process := w.acquireProcess()
 
 	if process != nil {
 		return ErrWorkerAlreadyStarted
 	}
 
-	process, err := startProc[I, O](config, w.log)
+	process, err := startProc[I, M, O](config, w.log)
 	if err != nil {
 		return err
 	}
@@ -93,7 +86,7 @@ func (w *ProcessWorker[I, O]) Start(ctx context.Context, config StartConfig) err
 // Wait waits for the worker process to exit. The method blocks until the process
 // exits. The method returns an ExitEvent object that contains the exit status of
 // the process. If the process is already terminated, the method returns immediately.
-func (w *ProcessWorker[I, O]) Wait(ctx context.Context) (ExitEvent, error) {
+func (w *ProcessWorker[I, M, O]) Wait(ctx context.Context) (ExitEvent, error) {
 	select {
 	case <-ctx.Done():
 		return ExitEvent{}, ctx.Err()
@@ -106,7 +99,7 @@ func (w *ProcessWorker[I, O]) Wait(ctx context.Context) (ExitEvent, error) {
 // or the timeout is reached. The method returns an ExitEvent that contains the exit
 // status of the process. If the process is already terminated, the method returns
 // immediately.
-func (w *ProcessWorker[I, O]) WaitFor(
+func (w *ProcessWorker[I, M, O]) WaitFor(
 	ctx context.Context,
 	deadline time.Duration,
 ) (ExitEvent, error) {
@@ -118,7 +111,7 @@ func (w *ProcessWorker[I, O]) WaitFor(
 
 // Terminate sends a SIGTERM signal to the worker process to request it to stop.
 // The method returns immediately, without waiting for the process to stop.
-func (w *ProcessWorker[I, O]) Terminate() error {
+func (w *ProcessWorker[I, M, O]) Terminate() error {
 	process := w.acquireProcess()
 
 	if process == nil {
@@ -153,7 +146,7 @@ func (w *ProcessWorker[I, O]) Terminate() error {
 // Read tries to read a message from the worker process. The message
 // is expected to be a JSON-serializable object. The worker process is
 // expected to send the message on its stdout.
-func (w *ProcessWorker[I, O]) Read(ctx context.Context, params ReadConfig) (O, error) {
+func (w *ProcessWorker[I, M, O]) Read(ctx context.Context, params ReadConfig) (O, error) {
 	process := w.acquireProcess()
 
 	var result O
@@ -173,7 +166,10 @@ func (w *ProcessWorker[I, O]) Read(ctx context.Context, params ReadConfig) (O, e
 // Write writes a message to the worker process. The message is
 // expected to be a JSON-serializable object. The worker process
 // is expected to read the message from stdin and process it.
-func (w *ProcessWorker[I, O]) Write(ctx context.Context, data I) error {
+func (w *ProcessWorker[I, M, O]) Write(
+	ctx context.Context,
+	data models.Message[I, M],
+) error {
 	process := w.acquireProcess()
 
 	if process == nil {
@@ -193,9 +189,9 @@ func (w *ProcessWorker[I, O]) Write(ctx context.Context, data I) error {
 // be a JSON-serializable object. The worker process is expected
 // to read the message from stdin and process it. The worker
 // process may send a response to the message on its stdout.
-func (w *ProcessWorker[I, O]) Send(
+func (w *ProcessWorker[I, M, O]) Send(
 	ctx context.Context,
-	data I,
+	data models.Message[I, M],
 	params SendConfig,
 ) (O, error) {
 	process := w.acquireProcess()
@@ -230,7 +226,7 @@ func (w *ProcessWorker[I, O]) Send(
 }
 
 // getProcess returns the worker process. The method is thread-safe.
-func (w *ProcessWorker[I, O]) setProcess(p *proc[I, O]) {
+func (w *ProcessWorker[I, M, O]) setProcess(p *proc[I, M, O]) {
 	w.processLock.Lock()
 	defer w.processLock.Unlock()
 
@@ -238,7 +234,7 @@ func (w *ProcessWorker[I, O]) setProcess(p *proc[I, O]) {
 }
 
 // acquireProcess returns the worker process. The method is thread-safe.
-func (w *ProcessWorker[I, O]) acquireProcess() *proc[I, O] {
+func (w *ProcessWorker[I, M, O]) acquireProcess() *proc[I, M, O] {
 	w.processLock.Lock()
 	defer w.processLock.Unlock()
 

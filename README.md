@@ -57,13 +57,21 @@ GLOBAL OPTIONS:
 
 ## Evaluation Runtime Interface
 
-The evaluation function is expected to be a standalone application or script that implements the evaluation runtime interface. The evaluation runtime interface is a simple, language-agnostic protocol that defines how the shim communicates with the evaluation function.
+The evaluation function is expected to be a standalone application or script that implements the evaluation runtime interface. The evaluation runtime interface is a simple, language-agnostic, JSON-based protocol that defines how the shim communicates with the evaluation function.
 
-The evaluation function is responsible for parsing the input JSON object, performing the evaluation, and responding with the output JSON object. The evaluation function should exit with a status code of `0` if the evaluation was successful, and a non-zero status code if an error occurred.
+The evaluation function is responsible for parsing the input JSON message, performing the evaluation, and responding with the output JSON message. The evaluation function should exit with a status code of `0` if the evaluation was successful, and a non-zero status code if an error occurred.
 
 ### Messages
 
-The interface consists of input and output messages, which are exchanged between the shim and the evaluation function. Both the input and output to the evaluation function are expected to be any unstructured JSON object, without any restrictions on schema, format or content.
+The interface consists of input and output messages, which are exchanged between the shim and the evaluation function. Both the input and output to the evaluation function are expected to be valid JSON messages, conforming to the schema defined in the following.
+
+#### Input
+
+The input message is a JSON-encoded string that contains the following fields:
+
+- `
+
+#### Output
 
 ### Communication Channels
 

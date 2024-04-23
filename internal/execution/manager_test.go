@@ -13,8 +13,8 @@ import (
 )
 
 func TestManager_New_FailsInvalidCapacity(t *testing.T) {
-	m, err := execution.NewManager(execution.Params[any, any]{
-		Config: execution.Config[any, any]{
+	m, err := execution.NewManager(execution.Params[any, any, any]{
+		Config: execution.Config[any, any, any]{
 			MaxWorkers: 0,
 		},
 		Context: context.Background(),
@@ -41,7 +41,7 @@ func TestManager_Send(t *testing.T) {
 }
 
 func TestManager_Send_FailsToAcquireSupervisor(t *testing.T) {
-	factory := func(params supervisor.Params[any, any]) (supervisor.Supervisor[any, any], error) {
+	factory := func(params supervisor.Params[any, any, any]) (supervisor.Supervisor[any, any, any], error) {
 		return nil, assert.AnError
 	}
 
@@ -202,10 +202,10 @@ func TestManager_Shutdown_DestroysSupervisor(t *testing.T) {
 
 // MARK: - helpers
 
-func createManager(t *testing.T) (*execution.WorkerManager[any, any], *supervisor.MockSupervisor[any, any], error) {
+func createManager(t *testing.T) (*execution.WorkerManager[any, any, any], *supervisor.MockSupervisor[any, any], error) {
 	sv := supervisor.NewMockSupervisor[any, any](t)
 
-	factory := func(params supervisor.Params[any, any]) (supervisor.Supervisor[any, any], error) {
+	factory := func(params supervisor.Params[any, any, any]) (supervisor.Supervisor[any, any, any], error) {
 		return sv, nil
 	}
 
@@ -218,10 +218,10 @@ func createManager(t *testing.T) (*execution.WorkerManager[any, any], *superviso
 }
 
 func createManagerWithFactory(
-	factory execution.SupervisorFactory[any, any],
-) (*execution.WorkerManager[any, any], error) {
-	return execution.NewManager(execution.Params[any, any]{
-		Config: execution.Config[any, any]{
+	factory execution.SupervisorFactory[any, any, any],
+) (*execution.WorkerManager[any, any, any], error) {
+	return execution.NewManager(execution.Params[any, any, any]{
+		Config: execution.Config[any, any, any]{
 			MaxWorkers: 1,
 		},
 		Context:           context.Background(),

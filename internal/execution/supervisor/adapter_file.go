@@ -6,28 +6,29 @@ import (
 	"errors"
 	"os"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/models"
 	"github.com/lambda-feedback/shimmy/internal/execution/worker"
 	"go.uber.org/zap"
 )
 
-type fileAdapter[I, O any] struct {
-	worker worker.Worker[any, any]
+type fileAdapter[I, M, O any] struct {
+	worker worker.Worker[any, any, any]
 
 	startParams worker.StartConfig
 
 	log *zap.Logger
 }
 
-func newFileAdapter[I, O any](log *zap.Logger) *fileAdapter[I, O] {
-	worker := worker.NewProcessWorker[any, any](log)
+func newFileAdapter[I, M, O any](log *zap.Logger) *fileAdapter[I, M, O] {
+	worker := worker.NewProcessWorker[any, any, any](log)
 
-	return &fileAdapter[I, O]{
+	return &fileAdapter[I, M, O]{
 		worker: worker,
 		log:    log,
 	}
 }
 
-func (a *fileAdapter[I, O]) Start(ctx context.Context, params worker.StartConfig) error {
+func (a *fileAdapter[I, M, O]) Start(ctx context.Context, params worker.StartConfig) error {
 	// for fileio, we can't yet start the worker, as we do need to pass
 	// the file path with the request data to the worker via arguments.
 
@@ -37,22 +38,22 @@ func (a *fileAdapter[I, O]) Start(ctx context.Context, params worker.StartConfig
 	return nil
 }
 
-func (a *fileAdapter[I, O]) Send(
+func (a *fileAdapter[I, M, O]) Send(
 	ctx context.Context,
-	data I,
+	data models.Message[I, M],
 	params worker.SendConfig,
 ) (O, error) {
-	var res O
+	var out O
 
 	if a.worker == nil {
-		return res, errors.New("no worker provided")
+		return out, errors.New("no worker provided")
 	}
 
 	// create temp files for request and response data
 	reqFile, err := os.CreateTemp("", "request-data-*")
 	if err != nil {
 		a.log.Error("error creating temp file", zap.Error(err))
-		return res, err
+		return out, err
 	}
 	defer reqFile.Close()
 	defer os.Remove(reqFile.Name())
@@ -60,15 +61,20 @@ func (a *fileAdapter[I, O]) Send(
 	resFile, err := os.CreateTemp("", "response-data-*")
 	if err != nil {
 		a.log.Error("error creating temp req file", zap.Error(err))
-		return res, err
+		return out, err
 	}
 	defer resFile.Close()
 	defer os.Remove(resFile.Name())
 
+	req := worker.Request[I, M]{
+		Data: data.GetPayload(),
+		Meta: data.GetMeta(),
+	}
+
 	// write data to request file
-	if err := json.NewEncoder(reqFile).Encode(data); err != nil {
+	if err := json.NewEncoder(reqFile).Encode(req); err != nil {
 		a.log.Error("error writing temp req file", zap.Error(err))
-		return res, err
+		return out, err
 	}
 
 	startParams := a.startParams
@@ -87,7 +93,7 @@ func (a *fileAdapter[I, O]) Send(
 	// start worker with modified args and env
 	if err := a.worker.Start(ctx, startParams); err != nil {
 		a.log.Error("error starting worker", zap.Error(err))
-		return res, err
+		return out, err
 	}
 
 	// wait for worker to terminate (maybe find another way to read res earlier?)
@@ -95,19 +101,19 @@ func (a *fileAdapter[I, O]) Send(
 	_, err = a.worker.WaitFor(ctx, params.Timeout)
 	if err != nil {
 		a.log.Error("error waiting for worker to finish", zap.Error(err))
-		return res, err
+		return out, err
 	}
 
 	// read response data from res file
-	if err := json.NewDecoder(resFile).Decode(&res); err != nil {
+	if err := json.NewDecoder(resFile).Decode(&out); err != nil {
 		a.log.Error("error reading temp req file", zap.Error(err))
-		return res, err
+		return out, err
 	}
 
-	return res, nil
+	return out, nil
 }
 
-func (a *fileAdapter[I, O]) Stop(
+func (a *fileAdapter[I, M, O]) Stop(
 	ctx context.Context,
 	params worker.StopConfig,
 ) (WaitFunc, error) {

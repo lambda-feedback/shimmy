@@ -44,3 +44,22 @@ type ReadConfig struct {
 	// Timeout is the duration to wait for the worker to send a message
 	Timeout time.Duration `conf:"timeout"`
 }
+
+type Request[T, M any] struct {
+	// ID is the message identifier
+	ID int `json:"id,omitempty"`
+
+	// Data is the message payload
+	Data T `json:"data"`
+
+	// Meta is the message metadata
+	Meta M `json:"meta,omitempty"`
+}
+
+type Response[T any] struct {
+	// ID is the message identifier
+	ID int `json:"id"`
+
+	// Data is the message payload
+	Data T `json:"data"`
+}

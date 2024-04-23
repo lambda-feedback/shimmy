@@ -7,12 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/models"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
 
 func TestProc_Start_IsAlive(t *testing.T) {
-	p, err := startProc[any, any](StartConfig{
+	p, err := startProc[any, any, any](StartConfig{
 		Cmd:  "sleep",
 		Args: []string{"10"},
 	}, zap.NewNop())
@@ -28,7 +29,7 @@ func TestProc_Start_IsAlive(t *testing.T) {
 }
 
 func TestProc_Terminate_KillsProcess(t *testing.T) {
-	p, err := startProc[any, any](StartConfig{
+	p, err := startProc[any, any, any](StartConfig{
 		Cmd:  "sleep",
 		Args: []string{"10"},
 	}, zap.NewNop())
@@ -44,7 +45,7 @@ func TestProc_Terminate_KillsProcess(t *testing.T) {
 }
 
 func TestProc_Terminate_SendsTerminationSignal(t *testing.T) {
-	p, err := startProc[any, any](StartConfig{
+	p, err := startProc[any, any, any](StartConfig{
 		Cmd:  "sleep",
 		Args: []string{"10"},
 	}, zap.NewNop())
@@ -69,7 +70,7 @@ func TestProc_Terminate_SendsTerminationSignal(t *testing.T) {
 }
 
 func TestProc_Write_WritesToStdin(t *testing.T) {
-	p, err := startProc[string, string](StartConfig{
+	p, err := startProc[string, string, string](StartConfig{
 		Cmd: "cat",
 	}, zap.NewNop())
 	assert.NoError(t, err)
@@ -77,7 +78,9 @@ func TestProc_Write_WritesToStdin(t *testing.T) {
 	defer p.Terminate(-1)
 
 	// write data
-	msgId, err := p.Write(context.Background(), "foo")
+	msgId, err := p.Write(context.Background(), &models.GenericMessage[string, string]{
+		Payload: "foo",
+	})
 	assert.NoError(t, err)
 
 	// close stdin

@@ -4,11 +4,12 @@ import (
 	"context"
 	"sync"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/models"
 	"github.com/lambda-feedback/shimmy/internal/execution/worker"
 	"go.uber.org/zap"
 )
 
-type Supervisor[I, O any] interface {
+type Supervisor[I, M, O any] interface {
 	// Start starts the supervisor. If the supervisor is persistent,
 	// this will boot the worker. If the supervisor is transient, this
 	// is a no-op.
@@ -18,7 +19,7 @@ type Supervisor[I, O any] interface {
 	// this will acquire the worker and send the message. If the worker
 	// is transient, this will boot a new worker, send the message, and
 	// terminate the worker.
-	Send(ctx context.Context, data I) (*Result[O], error)
+	Send(ctx context.Context, data models.Message[I, M]) (*Result[O], error)
 
 	// Suspend suspends the worker. If the worker is persistent, this
 	// will release the worker. If the worker is transient, this will
@@ -31,14 +32,14 @@ type Supervisor[I, O any] interface {
 	Shutdown(ctx context.Context) (WaitFunc, error)
 }
 
-type WorkerSupervisor[I, O any] struct {
+type WorkerSupervisor[I, M, O any] struct {
 	persistent bool
 	mode       IOInterface
 
 	sendLock sync.Mutex
 
-	worker        Adapter[I, O]
-	workerFactory AdapterFactoryFn[I, O]
+	worker        Adapter[I, M, O]
+	workerFactory AdapterFactoryFn[I, M, O]
 	workerLock    sync.Mutex
 
 	workerStartParams worker.StartConfig
@@ -48,9 +49,9 @@ type WorkerSupervisor[I, O any] struct {
 	log *zap.Logger
 }
 
-var _ Supervisor[any, any] = (*WorkerSupervisor[any, any])(nil)
+var _ Supervisor[any, any, any] = (*WorkerSupervisor[any, any, any])(nil)
 
-type Config[I, O any] struct {
+type Config[I, M, O any] struct {
 	// Persistent indicates whether the underlying worker can handle
 	// multiple messages, or if it is transient. Only valid for stdio
 	// based workers. Default is `false`.
@@ -84,13 +85,13 @@ type Config[I, O any] struct {
 	WorkerSendParams worker.SendConfig `conf:"send"`
 }
 
-type Params[I, O any] struct {
+type Params[I, M, O any] struct {
 	// Config is the config used to set up the supervisor and its workers.
-	Config Config[I, O]
+	Config Config[I, M, O]
 
 	// WorkerFactory the a factory function to create a new worker.
 	// This is called when the supervisor needs to boot a new worker.
-	WorkerFactory AdapterFactoryFn[I, O]
+	WorkerFactory AdapterFactoryFn[I, M, O]
 
 	// Log is the logger to use for the supervisor
 	Log *zap.Logger
@@ -101,7 +102,7 @@ type Result[O any] struct {
 	Wait WaitFunc
 }
 
-func New[I, O any](params Params[I, O]) (Supervisor[I, O], error) {
+func New[I, M, O any](params Params[I, M, O]) (Supervisor[I, M, O], error) {
 	config := params.Config
 
 	// validate params
@@ -113,7 +114,7 @@ func New[I, O any](params Params[I, O]) (Supervisor[I, O], error) {
 		params.WorkerFactory = defaultAdapterFactory
 	}
 
-	return &WorkerSupervisor[I, O]{
+	return &WorkerSupervisor[I, M, O]{
 		persistent:        config.Persistent,
 		mode:              config.Interface,
 		workerFactory:     params.WorkerFactory,
@@ -124,7 +125,7 @@ func New[I, O any](params Params[I, O]) (Supervisor[I, O], error) {
 	}, nil
 }
 
-func (s *WorkerSupervisor[I, O]) Start(ctx context.Context) error {
+func (s *WorkerSupervisor[I, M, O]) Start(ctx context.Context) error {
 	// if the worker is transient, this is a no-op
 	if !s.persistent {
 		return nil
@@ -139,7 +140,10 @@ func (s *WorkerSupervisor[I, O]) Start(ctx context.Context) error {
 	return nil
 }
 
-func (s *WorkerSupervisor[I, O]) Send(ctx context.Context, data I) (*Result[O], error) {
+func (s *WorkerSupervisor[I, M, O]) Send(
+	ctx context.Context,
+	data models.Message[I, M],
+) (*Result[O], error) {
 	// acquire send lock. should not be necessary as supervisors
 	// are managed by a resource pool, but it does no harm to make
 	// the supervisor thread-safe and serialize access.
@@ -176,15 +180,17 @@ func (s *WorkerSupervisor[I, O]) Send(ctx context.Context, data I) (*Result[O], 
 	}, nil
 }
 
-func (s *WorkerSupervisor[I, O]) Suspend(ctx context.Context) (WaitFunc, error) {
+func (s *WorkerSupervisor[I, M, O]) Suspend(ctx context.Context) (WaitFunc, error) {
 	return s.releaseWorker(ctx)
 }
 
-func (s *WorkerSupervisor[I, O]) Shutdown(ctx context.Context) (WaitFunc, error) {
+func (s *WorkerSupervisor[I, M, O]) Shutdown(ctx context.Context) (WaitFunc, error) {
 	return s.terminateWorker(ctx)
 }
 
-func (s *WorkerSupervisor[I, O]) acquireWorker(ctx context.Context) (Adapter[I, O], error) {
+func (s *WorkerSupervisor[I, M, O]) acquireWorker(
+	ctx context.Context,
+) (Adapter[I, M, O], error) {
 	s.workerLock.Lock()
 	defer s.workerLock.Unlock()
 
@@ -204,7 +210,7 @@ func (s *WorkerSupervisor[I, O]) acquireWorker(ctx context.Context) (Adapter[I, 
 	return worker, nil
 }
 
-func (s *WorkerSupervisor[I, O]) releaseWorker(ctx context.Context) (WaitFunc, error) {
+func (s *WorkerSupervisor[I, M, O]) releaseWorker(ctx context.Context) (WaitFunc, error) {
 	// if the worker is persistent, this is a no-op, as we
 	// want to keep the worker alive for future messages
 	if s.persistent {
@@ -214,7 +220,9 @@ func (s *WorkerSupervisor[I, O]) releaseWorker(ctx context.Context) (WaitFunc, e
 	return s.terminateWorker(ctx)
 }
 
-func (s *WorkerSupervisor[I, O]) terminateWorker(ctx context.Context) (WaitFunc, error) {
+func (s *WorkerSupervisor[I, M, O]) terminateWorker(
+	ctx context.Context,
+) (WaitFunc, error) {
 	s.workerLock.Lock()
 	defer s.workerLock.Unlock()
 
@@ -231,7 +239,9 @@ func (s *WorkerSupervisor[I, O]) terminateWorker(ctx context.Context) (WaitFunc,
 	return s.worker.Stop(ctx, s.workerStopParams)
 }
 
-func (s *WorkerSupervisor[I, O]) bootWorker(ctx context.Context) (Adapter[I, O], error) {
+func (s *WorkerSupervisor[I, M, O]) bootWorker(
+	ctx context.Context,
+) (Adapter[I, M, O], error) {
 	worker, err := s.workerFactory(s.mode, s.log)
 	if err != nil {
 		return nil, err

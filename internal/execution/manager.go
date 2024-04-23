@@ -4,50 +4,51 @@ import (
 	"context"
 
 	"github.com/jackc/puddle/v2"
+	"github.com/lambda-feedback/shimmy/internal/execution/models"
 	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
 	"go.uber.org/zap"
 )
 
-type Manager[I, O any] interface {
+type Manager[I, M, O any] interface {
 	// Send sends data to a supervisor and returns the result
-	Send(ctx context.Context, data I) (O, error)
+	Send(ctx context.Context, data models.Message[I, M]) (O, error)
 
 	// Shutdown stops the manager and waits for all workers to finish.
 	Shutdown()
 }
 
-type WorkerManager[I, O any] struct {
-	pool *puddle.Pool[supervisor.Supervisor[I, O]]
+type WorkerManager[I, M, O any] struct {
+	pool *puddle.Pool[supervisor.Supervisor[I, M, O]]
 	log  *zap.Logger
 }
 
-var _ Manager[any, any] = (*WorkerManager[any, any])(nil)
+var _ Manager[any, any, any] = (*WorkerManager[any, any, any])(nil)
 
-type SupervisorFactory[I, O any] func(supervisor.Params[I, O]) (supervisor.Supervisor[I, O], error)
+type SupervisorFactory[I, M, O any] func(supervisor.Params[I, M, O]) (supervisor.Supervisor[I, M, O], error)
 
-type Config[I, O any] struct {
+type Config[I, M, O any] struct {
 	// MaxWorkers is the maximum number of concurrent workers
 	MaxWorkers int `conf:"max_workers"`
 
 	// SupervisorConfig is the configuration to use for the supervisor
-	Supervisor supervisor.Config[I, O] `conf:"supervisor,squash"`
+	Supervisor supervisor.Config[I, M, O] `conf:"supervisor,squash"`
 }
 
-type Params[I, O any] struct {
+type Params[I, M, O any] struct {
 	// Context is the context to use for the manager
 	Context context.Context
 
 	// Config is the config for the manager and the underlying supervisors
-	Config Config[I, O]
+	Config Config[I, M, O]
 
 	// SupervisorFactory is the factory function to create a new supervisor
-	SupervisorFactory SupervisorFactory[I, O]
+	SupervisorFactory SupervisorFactory[I, M, O]
 
 	// Log is the logger to use for the manager
 	Log *zap.Logger
 }
 
-func NewManager[I, O any](params Params[I, O]) (*WorkerManager[I, O], error) {
+func NewManager[I, M, O any](params Params[I, M, O]) (*WorkerManager[I, M, O], error) {
 	log := params.Log.Named("manager")
 
 	if params.SupervisorFactory == nil {
@@ -59,13 +60,16 @@ func NewManager[I, O any](params Params[I, O]) (*WorkerManager[I, O], error) {
 		return nil, err
 	}
 
-	return &WorkerManager[I, O]{
+	return &WorkerManager[I, M, O]{
 		pool: pool,
 		log:  log,
 	}, nil
 }
 
-func (m *WorkerManager[I, O]) Send(ctx context.Context, data I) (O, error) {
+func (m *WorkerManager[I, M, O]) Send(
+	ctx context.Context,
+	data models.Message[I, M],
+) (O, error) {
 	resource, err := m.pool.Acquire(ctx)
 	if err != nil {
 		m.log.Error("error acquiring supervisor", zap.Error(err))
@@ -117,15 +121,15 @@ func (m *WorkerManager[I, O]) Send(ctx context.Context, data I) (O, error) {
 }
 
 // Shutdown stops the manager and waits for all workers to finish.
-func (m *WorkerManager[I, O]) Shutdown() {
+func (m *WorkerManager[I, M, O]) Shutdown() {
 	m.pool.Close()
 }
 
 // MARK: - Pool
 
-func createPool[I, O any](params Params[I, O]) (*puddle.Pool[supervisor.Supervisor[I, O]], error) {
-	constructor := func(ctx context.Context) (supervisor.Supervisor[I, O], error) {
-		sv, err := params.SupervisorFactory(supervisor.Params[I, O]{
+func createPool[I, M, O any](params Params[I, M, O]) (*puddle.Pool[supervisor.Supervisor[I, M, O]], error) {
+	constructor := func(ctx context.Context) (supervisor.Supervisor[I, M, O], error) {
+		sv, err := params.SupervisorFactory(supervisor.Params[I, M, O]{
 			Config: params.Config.Supervisor,
 			Log:    params.Log,
 		})
@@ -140,7 +144,7 @@ func createPool[I, O any](params Params[I, O]) (*puddle.Pool[supervisor.Supervis
 		return sv, nil
 	}
 
-	destructor := func(s supervisor.Supervisor[I, O]) {
+	destructor := func(s supervisor.Supervisor[I, M, O]) {
 		wait, err := s.Shutdown(params.Context)
 		if err != nil {
 			params.Log.Error("error shutting down supervisor", zap.Error(err))
@@ -157,13 +161,15 @@ func createPool[I, O any](params Params[I, O]) (*puddle.Pool[supervisor.Supervis
 		}
 	}
 
-	return puddle.NewPool(&puddle.Config[supervisor.Supervisor[I, O]]{
+	return puddle.NewPool(&puddle.Config[supervisor.Supervisor[I, M, O]]{
 		Constructor: constructor,
 		Destructor:  destructor,
 		MaxSize:     int32(params.Config.MaxWorkers),
 	})
 }
 
-func defaultSupervisorFactory[I, O any](params supervisor.Params[I, O]) (supervisor.Supervisor[I, O], error) {
+func defaultSupervisorFactory[I, M, O any](
+	params supervisor.Params[I, M, O],
+) (supervisor.Supervisor[I, M, O], error) {
 	return supervisor.New(params)
 }

@@ -3,31 +3,32 @@ package supervisor
 import (
 	"context"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/models"
 	"github.com/lambda-feedback/shimmy/internal/execution/worker"
 	"go.uber.org/zap"
 )
 
-type AdapterFactoryFn[I, O any] func(IOInterface, *zap.Logger) (Adapter[I, O], error)
+type AdapterFactoryFn[I, M, O any] func(IOInterface, *zap.Logger) (Adapter[I, M, O], error)
 
 type WaitFunc func() error
 
-type Adapter[I, O any] interface {
+type Adapter[I, M, O any] interface {
 	Start(context.Context, worker.StartConfig) error
 	Stop(context.Context, worker.StopConfig) (WaitFunc, error)
-	Send(context.Context, I, worker.SendConfig) (O, error)
+	Send(context.Context, models.Message[I, M], worker.SendConfig) (O, error)
 }
 
 // MARK: - factory
 
-func defaultAdapterFactory[I, O any](
+func defaultAdapterFactory[I, M, O any](
 	mode IOInterface,
 	log *zap.Logger,
-) (Adapter[I, O], error) {
+) (Adapter[I, M, O], error) {
 	switch mode {
 	case FileIO:
-		return newFileAdapter[I, O](log), nil
+		return newFileAdapter[I, M, O](log), nil
 	case StdIO:
-		return newStdioAdapter[I, O](log), nil
+		return newStdioAdapter[I, M, O](log), nil
 	// case SocketIO:
 	// 	return &socketAdapter[I, O]{log: log}, nil
 	default:
@@ -37,9 +38,9 @@ func defaultAdapterFactory[I, O any](
 
 // MARK: - helpers
 
-func stopWorker[I, O any](
+func stopWorker[I, M, O any](
 	ctx context.Context,
-	w worker.Worker[I, O],
+	w worker.Worker[I, M, O],
 	params worker.StopConfig,
 ) (WaitFunc, error) {
 

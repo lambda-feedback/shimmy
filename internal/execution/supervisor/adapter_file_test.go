@@ -12,10 +12,10 @@ import (
 	"go.uber.org/zap"
 )
 
-func createFileAdapter(t *testing.T) (*fileAdapter[any, any], *worker.MockWorker[any, any]) {
-	worker := worker.NewMockWorker[any, any](t)
+func createFileAdapter(t *testing.T) (*fileAdapter[any, any, any], *worker.MockWorker[any, any]) {
+	worker := worker.NewMockWorker[any, any, any](t)
 
-	adapter := &fileAdapter[any, any]{
+	adapter := &fileAdapter[any, any, any]{
 		worker: worker,
 		log:    zap.NewNop(),
 	}

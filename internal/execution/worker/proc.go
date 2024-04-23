@@ -10,10 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/models"
 	"go.uber.org/zap"
 )
 
-type proc[I, O any] struct {
+type proc[I, M, O any] struct {
 	pid         int
 	termination chan error
 	stdout      io.ReadCloser
@@ -26,7 +27,7 @@ type proc[I, O any] struct {
 	log *zap.Logger
 }
 
-func startProc[I, O any](config StartConfig, log *zap.Logger) (*proc[I, O], error) {
+func startProc[I, M, O any](config StartConfig, log *zap.Logger) (*proc[I, M, O], error) {
 	cmd := exec.Command(config.Cmd, config.Args...)
 
 	if config.Env != nil {
@@ -65,7 +66,7 @@ func startProc[I, O any](config StartConfig, log *zap.Logger) (*proc[I, O], erro
 
 	log = log.Named("worker_proc").With(zap.Int("pid", cmd.Process.Pid))
 
-	process := &proc[I, O]{
+	process := &proc[I, M, O]{
 		pid:         cmd.Process.Pid,
 		termination: make(chan error),
 		stdout:      stdout,
@@ -88,7 +89,7 @@ func startProc[I, O any](config StartConfig, log *zap.Logger) (*proc[I, O], erro
 	return process, nil
 }
 
-func (p *proc[I, O]) Terminate(timeout time.Duration) error {
+func (p *proc[I, M, O]) Terminate(timeout time.Duration) error {
 	// terminate should report success if the process terminated
 	// by the time supervisor receives the request.
 	select {
@@ -104,7 +105,7 @@ func (p *proc[I, O]) Terminate(timeout time.Duration) error {
 	return p.waitForTermination(timeout)
 }
 
-func (p *proc[I, O]) Kill(timeout time.Duration) error {
+func (p *proc[I, M, O]) Kill(timeout time.Duration) error {
 	// kill should report success if the process terminated by the time
 	// supervisor receives the request.
 	select {
@@ -121,15 +122,15 @@ func (p *proc[I, O]) Kill(timeout time.Duration) error {
 	return p.waitForTermination(timeout)
 }
 
-func (p *proc[I, O]) Wait() error {
+func (p *proc[I, M, O]) Wait() error {
 	return p.waitForTermination(0)
 }
 
-func (p *proc[I, O]) WaitFor(timeout time.Duration) error {
+func (p *proc[I, M, O]) WaitFor(timeout time.Duration) error {
 	return p.waitForTermination(timeout)
 }
 
-func (p *proc[I, O]) waitForTermination(timeout time.Duration) error {
+func (p *proc[I, M, O]) waitForTermination(timeout time.Duration) error {
 	// if timeout is < 0, don't wait for the process to exit
 	if timeout < 0 {
 		return nil
@@ -153,7 +154,7 @@ func (p *proc[I, O]) waitForTermination(timeout time.Duration) error {
 	}
 }
 
-func (p *proc[I, O]) kill(signal syscall.Signal) {
+func (p *proc[I, M, O]) kill(signal syscall.Signal) {
 	log := p.log.With(zap.Stringer("signal", signal))
 
 	// close stdin before killing the process, to
@@ -170,7 +171,7 @@ func (p *proc[I, O]) kill(signal syscall.Signal) {
 	}
 }
 
-func (p *proc[I, O]) sendKillSignal(signal syscall.Signal) error {
+func (p *proc[I, M, O]) sendKillSignal(signal syscall.Signal) error {
 	if pgid, err := syscall.Getpgid(p.pid); err == nil {
 		// Negative pid sends signal to all in process group
 		return syscall.Kill(-pgid, signal)
@@ -179,12 +180,13 @@ func (p *proc[I, O]) sendKillSignal(signal syscall.Signal) error {
 	}
 }
 
-func (p *proc[I, O]) Write(ctx context.Context, data I) (int, error) {
+func (p *proc[I, M, O]) Write(ctx context.Context, data models.Message[I, M]) (int, error) {
 	reqID := p.nextMsgID()
 
-	req := Message[I]{
+	req := Request[I, M]{
 		ID:   reqID,
-		Data: data,
+		Data: data.GetPayload(),
+		Meta: data.GetMeta(),
 	}
 
 	// write encoded message to process stdin
@@ -195,7 +197,7 @@ func (p *proc[I, O]) Write(ctx context.Context, data I) (int, error) {
 	return reqID, nil
 }
 
-func (p *proc[I, O]) Close() error {
+func (p *proc[I, M, O]) Close() error {
 	if err := p.stdin.Close(); err != nil {
 		return err
 	}
@@ -203,7 +205,7 @@ func (p *proc[I, O]) Close() error {
 	return nil
 }
 
-func (p *proc[I, O]) nextMsgID() int {
+func (p *proc[I, M, O]) nextMsgID() int {
 	p.msgidLock.Lock()
 	defer p.msgidLock.Unlock()
 
@@ -213,8 +215,8 @@ func (p *proc[I, O]) nextMsgID() int {
 	return id
 }
 
-func (p *proc[I, O]) Read(ctx context.Context, timeout time.Duration) (Message[O], error) {
-	var result Message[O]
+func (p *proc[I, M, O]) Read(ctx context.Context, timeout time.Duration) (Response[O], error) {
+	var result Response[O]
 
 	// Create a channel to signal the completion of reading and decoding.
 	done := make(chan error, 1)
