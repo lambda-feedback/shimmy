@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -40,7 +41,10 @@ func (e ProcessExitEvent) Status() ExitStatus {
 type ProcessWorker[I, O any] struct {
 	processLock sync.Mutex
 	process     *proc
-	exitChan    chan ExitEvent
+
+	wg   sync.WaitGroup
+	done chan struct{}
+	exit chan ExitEvent
 
 	stderr   bytes.Buffer
 	stderrWg sync.WaitGroup
@@ -48,10 +52,11 @@ type ProcessWorker[I, O any] struct {
 	log *zap.Logger
 }
 
-func NewProcessWorker[I, O any](log *zap.Logger) Worker[I, O] {
+func NewProcessWorker[I, O any](log *zap.Logger) *ProcessWorker[I, O] {
 	return &ProcessWorker[I, O]{
-		exitChan: make(chan ProcessExitEvent),
-		log:      log.Named("worker"),
+		done: make(chan struct{}),
+		exit: make(chan ExitEvent),
+		log:  log.Named("worker"),
 	}
 }
 
@@ -89,31 +94,51 @@ func (w *ProcessWorker[I, O]) Start(ctx context.Context, config StartConfig) err
 	// set the process
 	w.process = process
 
+	// increment the wait group
+	w.wg.Add(1)
+
 	// wait for the process to terminate,
 	// and send the exit event to the channel
 	go func() {
-		// block until the process exits
-		err := process.Wait()
+		// first, wait for `Wait` to be called
+		w.wg.Wait()
 
 		// wait for stderr to be read
 		w.stderrWg.Wait()
 
+		// block until the process exits
+		err := process.Wait()
+
+		// get the exit event
+		evt := getProcessExitEvent(err, w.stderr.String())
+
+		// log the exit event
+		w.log.With(
+			zap.Any("code", evt.Code),
+			zap.Any("signal", evt.Signal),
+			zap.String("stderr", evt.Stderr),
+		).Debug("process exited")
+
 		// send the exit event to the channel
-		w.exitChan <- getExitEvent(err, w.stderr.String())
+		w.exit <- evt
 
 		// close the exit channel
-		close(w.exitChan)
+		close(w.exit)
+
+		// close the done channel
+		close(w.done)
 	}()
 
 	// wait for the context to be cancelled,
 	// and terminate the process.
 	go func() {
 		select {
-		case <-process.Done():
+		case <-w.done:
 			// the process has terminated, do nothing
 		case <-ctx.Done():
 			// kill the process without further ado
-			process.Kill(-1)
+			w.log.Debug("context cancelled, killing process")
+			process.Kill()
 		}
 	}()
 
@@ -136,10 +161,13 @@ func (w *ProcessWorker[I, O]) Start(ctx context.Context, config StartConfig) err
 // exits. The method returns an ExitEvent object that contains the exit status of
 // the process. If the process is already terminated, the method returns immediately.
 func (w *ProcessWorker[I, O]) Wait(ctx context.Context) (ExitEvent, error) {
+	// decrement the wait group to wait for the process to exit
+	w.wg.Done()
+
 	select {
 	case <-ctx.Done():
-		return ExitEvent{}, ctx.Err()
-	case exitEvent := <-w.exitChan:
+		return ProcessExitEvent{}, ctx.Err()
+	case exitEvent := <-w.exit:
 		return exitEvent, nil
 	}
 }
@@ -147,29 +175,29 @@ func (w *ProcessWorker[I, O]) Wait(ctx context.Context) (ExitEvent, error) {
 // WaitFor waits for the worker process to exit. It blocks until the process exits
 // or the timeout is reached. The method returns an ExitEvent that contains the exit
 // status. If the process is already terminated, the method returns immediately.
-// func (w *ProcessWorker[I, O]) WaitFor(
-// 	ctx context.Context,
-// 	deadline time.Duration,
-// ) (ExitEvent, error) {
-// 	var waitCtx context.Context
-// 	var cancel context.CancelFunc
+func (w *ProcessWorker[I, O]) WaitFor(
+	ctx context.Context,
+	deadline time.Duration,
+) (ExitEvent, error) {
+	var waitCtx context.Context
+	var cancel context.CancelFunc
 
-// 	if deadline <= 0 {
-// 		waitCtx, cancel = context.WithCancel(ctx)
-// 	} else {
-// 		waitCtx, cancel = context.WithTimeout(ctx, deadline)
-// 	}
+	if deadline <= 0 {
+		waitCtx, cancel = context.WithCancel(ctx)
+	} else {
+		waitCtx, cancel = context.WithTimeout(ctx, deadline)
+	}
 
-// 	defer cancel()
+	defer cancel()
 
-// 	return w.Wait(waitCtx)
-// }
+	return w.Wait(waitCtx)
+}
 
 // Terminate sends a SIGKILL signal to the worker process to request it to stop.
 // The method returns immediately, without waiting for the process to stop.
-func (w *ProcessWorker[I, O]) Stop() error {
+func (w *ProcessWorker[I, O]) Stop(context.Context) error {
 	if process := w.acquireProcess(); process != nil {
-		return process.Terminate(-1)
+		return process.Terminate()
 	}
 
 	return ErrWorkerNotStarted
@@ -177,7 +205,7 @@ func (w *ProcessWorker[I, O]) Stop() error {
 
 func (w *ProcessWorker[I, O]) Pid() int {
 	if process := w.acquireProcess(); process != nil {
-		return process.pid
+		return process.Pid()
 	}
 
 	return 0
@@ -193,7 +221,7 @@ func (w *ProcessWorker[I, O]) acquireProcess() *proc {
 
 // MARK: - Helpers
 
-func getExitEvent(err error, stderr string) ExitEvent {
+func getProcessExitEvent(err error, stderr string) ProcessExitEvent {
 	var cell int
 	var exitStatus *int
 	var signo *int
