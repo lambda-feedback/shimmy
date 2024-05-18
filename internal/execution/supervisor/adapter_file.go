@@ -139,5 +139,5 @@ func (a *fileAdapter[I, O]) Stop(
 
 	a.log.Debug("stopping worker", zap.Any("params", params))
 
-	return stopWorker(ctx, a.worker, params)
+	return stopWorker[I, O](ctx, a.worker, params)
 }

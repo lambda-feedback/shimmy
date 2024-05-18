@@ -35,7 +35,7 @@ func TestFileAdapter_Start(t *testing.T) {
 func TestFileAdapter_Stop(t *testing.T) {
 	a, w := createFileAdapter(t)
 
-	w.EXPECT().Terminate().Return(nil)
+	w.EXPECT().Stop(mock.Anything).Return(nil)
 
 	_, err := a.Stop(context.Background(), worker.StopConfig{})
 	assert.NoError(t, err)
@@ -44,7 +44,7 @@ func TestFileAdapter_Stop(t *testing.T) {
 func TestFileAdapter_Stop_PassesError(t *testing.T) {
 	a, w := createFileAdapter(t)
 
-	w.EXPECT().Terminate().Return(assert.AnError)
+	w.EXPECT().Stop(mock.Anything).Return(assert.AnError)
 
 	_, err := a.Stop(context.Background(), worker.StopConfig{})
 	assert.ErrorIs(t, err, assert.AnError)
@@ -56,8 +56,8 @@ func TestFileAdapter_Stop_WaitFor(t *testing.T) {
 	ctx := context.Background()
 	params := worker.StopConfig{Timeout: 10}
 
-	w.EXPECT().Terminate().Return(nil)
-	w.EXPECT().WaitFor(mock.Anything, params.Timeout).Return(worker.ExitEvent{}, nil)
+	w.EXPECT().Stop(mock.Anything).Return(nil)
+	w.EXPECT().WaitFor(mock.Anything, params.Timeout).Return(worker.ProcessExitEvent{}, nil)
 
 	wait, err := a.Stop(ctx, params)
 	assert.NoError(t, err)
@@ -80,7 +80,7 @@ func TestFileAdapter_Send(t *testing.T) {
 		_ = os.WriteFile(sp.Args[len(sp.Args)-1], data, os.ModeAppend)
 		return nil
 	})
-	w.EXPECT().WaitFor(mock.Anything, params.Timeout).Return(worker.ExitEvent{}, nil)
+	w.EXPECT().WaitFor(mock.Anything, params.Timeout).Return(worker.ProcessExitEvent{}, nil)
 
 	res, err := a.Send(ctx, data, params)
 	assert.NoError(t, err)
@@ -106,7 +106,7 @@ func TestFileAdapter_Send_ReturnsWaitForError(t *testing.T) {
 	data := map[string]any{"foo": "bar"}
 
 	w.EXPECT().Start(ctx, mock.Anything).Return(nil)
-	w.EXPECT().WaitFor(ctx, mock.Anything).Return(worker.ExitEvent{}, assert.AnError)
+	w.EXPECT().WaitFor(ctx, mock.Anything).Return(worker.ProcessExitEvent{}, assert.AnError)
 
 	_, err := a.Send(ctx, data, worker.SendConfig{})
 	assert.ErrorIs(t, err, assert.AnError)
@@ -119,7 +119,7 @@ func TestFileAdapter_Send_ReturnsReadError(t *testing.T) {
 	data := map[string]any{"foo": "bar"}
 
 	w.EXPECT().Start(ctx, mock.Anything).Return(nil)
-	w.EXPECT().WaitFor(ctx, mock.Anything).Return(worker.ExitEvent{}, nil)
+	w.EXPECT().WaitFor(ctx, mock.Anything).Return(worker.ProcessExitEvent{}, nil)
 
 	_, err := a.Send(ctx, data, worker.SendConfig{})
 	assert.ErrorIs(t, err, io.EOF)

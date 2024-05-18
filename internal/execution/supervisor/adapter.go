@@ -61,7 +61,7 @@ func stopWorker[I, O any](
 	// TODO: what if shutdown fails? we have a zombie worker then...
 
 	// gracefully shutdown the worker
-	if err := w.Terminate(); err != nil {
+	if err := w.Stop(ctx); err != nil {
 		// no need to wait for termination if we could not terminate
 		return nil, err
 	}

@@ -49,14 +49,7 @@ func (a *stdioAdapter[I, O]) Send(
 		return res, errors.New("no worker provided")
 	}
 
-	// send data to worker
-	res, err := a.worker.Send(ctx, data, params)
-	if err != nil {
-		a.log.Debug("error sending data to worker", zap.Error(err))
-		return res, err
-	}
-
-	return res, nil
+	return res, errors.New("not implemented")
 }
 
 func (a *stdioAdapter[I, O]) Stop(
@@ -67,5 +60,5 @@ func (a *stdioAdapter[I, O]) Stop(
 		return nil, errors.New("no worker provided")
 	}
 
-	return stopWorker(ctx, a.worker, params)
+	return stopWorker[I, O](ctx, a.worker, params)
 }
