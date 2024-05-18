@@ -57,7 +57,7 @@ func TestFileAdapter_Stop_WaitFor(t *testing.T) {
 	params := worker.StopConfig{Timeout: 10}
 
 	w.EXPECT().Stop(mock.Anything).Return(nil)
-	w.EXPECT().WaitFor(mock.Anything, params.Timeout).Return(worker.ProcessExitEvent{}, nil)
+	w.EXPECT().WaitFor(mock.Anything, params.Timeout).Return(nil, nil)
 
 	wait, err := a.Stop(ctx, params)
 	assert.NoError(t, err)
@@ -80,7 +80,7 @@ func TestFileAdapter_Send(t *testing.T) {
 		_ = os.WriteFile(sp.Args[len(sp.Args)-1], data, os.ModeAppend)
 		return nil
 	})
-	w.EXPECT().WaitFor(mock.Anything, params.Timeout).Return(worker.ProcessExitEvent{}, nil)
+	w.EXPECT().WaitFor(mock.Anything, params.Timeout).Return(nil, nil)
 
 	res, err := a.Send(ctx, data, params)
 	assert.NoError(t, err)
@@ -106,7 +106,7 @@ func TestFileAdapter_Send_ReturnsWaitForError(t *testing.T) {
 	data := map[string]any{"foo": "bar"}
 
 	w.EXPECT().Start(ctx, mock.Anything).Return(nil)
-	w.EXPECT().WaitFor(ctx, mock.Anything).Return(worker.ProcessExitEvent{}, assert.AnError)
+	w.EXPECT().WaitFor(ctx, mock.Anything).Return(nil, assert.AnError)
 
 	_, err := a.Send(ctx, data, worker.SendConfig{})
 	assert.ErrorIs(t, err, assert.AnError)
@@ -119,7 +119,7 @@ func TestFileAdapter_Send_ReturnsReadError(t *testing.T) {
 	data := map[string]any{"foo": "bar"}
 
 	w.EXPECT().Start(ctx, mock.Anything).Return(nil)
-	w.EXPECT().WaitFor(ctx, mock.Anything).Return(worker.ProcessExitEvent{}, nil)
+	w.EXPECT().WaitFor(ctx, mock.Anything).Return(nil, nil)
 
 	_, err := a.Send(ctx, data, worker.SendConfig{})
 	assert.ErrorIs(t, err, io.EOF)

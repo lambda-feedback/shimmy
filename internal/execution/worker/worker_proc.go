@@ -25,7 +25,7 @@ type ProcessExitEvent struct {
 	Stderr string
 }
 
-func (e ProcessExitEvent) Status() ExitStatus {
+func (e *ProcessExitEvent) Status() ExitStatus {
 	if e.Signal != nil {
 		return ExitStatusFailure
 	}
@@ -166,7 +166,7 @@ func (w *ProcessWorker[I, O]) Wait(ctx context.Context) (ExitEvent, error) {
 
 	select {
 	case <-ctx.Done():
-		return ProcessExitEvent{}, ctx.Err()
+		return nil, ctx.Err()
 	case exitEvent := <-w.exit:
 		return exitEvent, nil
 	}
@@ -221,7 +221,7 @@ func (w *ProcessWorker[I, O]) acquireProcess() *proc {
 
 // MARK: - Helpers
 
-func getProcessExitEvent(err error, stderr string) ProcessExitEvent {
+func getProcessExitEvent(err error, stderr string) *ProcessExitEvent {
 	var cell int
 	var exitStatus *int
 	var signo *int
@@ -251,7 +251,7 @@ func getProcessExitEvent(err error, stderr string) ProcessExitEvent {
 		exitStatus = &cell
 	}
 
-	return ProcessExitEvent{
+	return &ProcessExitEvent{
 		Code:   exitStatus,
 		Signal: signo,
 		Stderr: stderr,
