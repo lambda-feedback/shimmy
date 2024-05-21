@@ -321,6 +321,10 @@ func (w *ProcessWorker) Stream() (io.ReadWriteCloser, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	if w.cmd.Process != nil {
+		return nil, ErrWorkerAlreadyStarted
+	}
+
 	stdin, err := w.cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get stdin pipe: %w", err)

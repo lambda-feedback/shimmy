@@ -23,8 +23,6 @@ func TestWorker_Start_IsAlive(t *testing.T) {
 
 	defer w.Kill()
 
-	time.Sleep(1000 * time.Millisecond)
-
 	assert.Equal(t, true, util.IsProcessAlive(w.Pid()))
 }
 
@@ -37,6 +35,13 @@ func TestWorker_Start_FailsIfStarted(t *testing.T) {
 	defer w.Kill()
 
 	err = w.Start(context.Background())
+	assert.Error(t, err)
+}
+
+func TestWorker_Start_ReturnsErrorIfInvalidCommand(t *testing.T) {
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: ""}, zap.NewNop())
+
+	err := w.Start(context.Background())
 	assert.Error(t, err)
 }
 
@@ -197,6 +202,26 @@ func TestWorker_Terminate_TerminatesProcess(t *testing.T) {
 
 	// the process should not be alive
 	assert.Equal(t, false, util.IsProcessAlive(w.Pid()))
+}
+
+func TestWorker_Stream_ReturnsErrorIfAlreadyStarted(t *testing.T) {
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
+
+	err := w.Start(context.Background())
+	assert.NoError(t, err)
+
+	defer w.Terminate()
+
+	_, err = w.Stream()
+	assert.Error(t, err)
+}
+
+func TestWorker_Stream_ReturnsReadWriteStream(t *testing.T) {
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
+
+	stream, err := w.Stream()
+	assert.NoError(t, err)
+	assert.NotNil(t, stream)
 }
 
 func TestWorker_Write_WritesToStdin(t *testing.T) {
