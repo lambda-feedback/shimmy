@@ -16,9 +16,9 @@ import (
 )
 
 func TestWorker_Start_IsAlive(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
 
-	err := w.Start(context.Background(), worker.StartConfig{Cmd: "cat"})
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	defer w.Kill()
@@ -29,35 +29,33 @@ func TestWorker_Start_IsAlive(t *testing.T) {
 }
 
 func TestWorker_Start_FailsIfStarted(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
 
-	startConfig := worker.StartConfig{Cmd: "cat"}
-
-	err := w.Start(context.Background(), startConfig)
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	defer w.Kill()
 
-	err = w.Start(context.Background(), startConfig)
+	err = w.Start(context.Background())
 	assert.Error(t, err)
 }
 
 func TestWorker_Start_FailsIfContextCancelled(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	err := w.Start(ctx, worker.StartConfig{Cmd: "cat"})
+	err := w.Start(ctx)
 	assert.Error(t, err)
 }
 
 func TestWorker_TerminatesIfContextCancelled(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
-
 	ctx, cancel := context.WithCancel(context.Background())
 
-	err := w.Start(ctx, worker.StartConfig{Cmd: "cat"})
+	w := worker.NewProcessWorker(ctx, worker.StartConfig{Cmd: "cat"}, zap.NewNop())
+
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	// cancel the worker context
@@ -72,12 +70,12 @@ func TestWorker_TerminatesIfContextCancelled(t *testing.T) {
 }
 
 func TestWorker_CapturesStderr(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
-
-	err := w.Start(context.Background(), worker.StartConfig{
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{
 		Cmd:  "sh",
 		Args: []string{"-c", ">&2 echo \"error\""},
-	})
+	}, zap.NewNop())
+
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	defer w.Terminate()
@@ -90,9 +88,9 @@ func TestWorker_CapturesStderr(t *testing.T) {
 }
 
 func TestWorker_Wait_ReturnsExitEvent(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "echo"}, zap.NewNop())
 
-	err := w.Start(context.Background(), worker.StartConfig{Cmd: "echo"})
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	defer w.Terminate()
@@ -105,9 +103,9 @@ func TestWorker_Wait_ReturnsExitEvent(t *testing.T) {
 }
 
 func TestWorker_Wait_ReturnsErrorIfContextCancelled(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
 
-	err := w.Start(context.Background(), worker.StartConfig{Cmd: "cat"})
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	defer w.Terminate()
@@ -119,9 +117,9 @@ func TestWorker_Wait_ReturnsErrorIfContextCancelled(t *testing.T) {
 	assert.Error(t, err)
 }
 func TestWorker_Wait_ReturnsErrorIfCalledMultiple(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
 
-	err := w.Start(context.Background(), worker.StartConfig{Cmd: "cat"})
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	w.Terminate()
@@ -134,9 +132,9 @@ func TestWorker_Wait_ReturnsErrorIfCalledMultiple(t *testing.T) {
 }
 
 func TestWorker_WaitFor_ReturnsExitEvent(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "echo"}, zap.NewNop())
 
-	err := w.Start(context.Background(), worker.StartConfig{Cmd: "echo"})
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	defer w.Terminate()
@@ -149,12 +147,12 @@ func TestWorker_WaitFor_ReturnsExitEvent(t *testing.T) {
 }
 
 func TestWorker_WaitFor_ReturnsErrorIfTimeout(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
-
-	err := w.Start(context.Background(), worker.StartConfig{
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{
 		Cmd:  "sleep",
 		Args: []string{"1"},
-	})
+	}, zap.NewNop())
+
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	defer w.Terminate()
@@ -164,9 +162,9 @@ func TestWorker_WaitFor_ReturnsErrorIfTimeout(t *testing.T) {
 }
 
 func TestWorker_Kill_KillsProcess(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
 
-	err := w.Start(context.Background(), worker.StartConfig{Cmd: "cat"})
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	w.Kill()
@@ -183,9 +181,9 @@ func TestWorker_Kill_KillsProcess(t *testing.T) {
 }
 
 func TestWorker_Terminate_TerminatesProcess(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
 
-	err := w.Start(context.Background(), worker.StartConfig{Cmd: "cat"})
+	err := w.Start(context.Background())
 	assert.NoError(t, err)
 
 	w.Terminate()
@@ -202,40 +200,48 @@ func TestWorker_Terminate_TerminatesProcess(t *testing.T) {
 }
 
 func TestWorker_Write_WritesToStdin(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{Cmd: "cat"}, zap.NewNop())
 
-	err := w.Start(context.Background(), worker.StartConfig{Cmd: "cat"})
+	stream, err := w.Stream()
+	assert.NoError(t, err)
+
+	err = w.Start(context.Background())
 	assert.NoError(t, err)
 
 	defer w.Terminate()
 
 	input := "foobar"
 
-	_, err = io.Copy(w, strings.NewReader(input))
+	_, err = io.Copy(stream, strings.NewReader(input))
 	assert.NoError(t, err)
 
-	w.Close()
+	stream.Close()
 
 	var outputBuf bytes.Buffer
-	_, err = io.Copy(&outputBuf, w)
+	_, err = io.Copy(&outputBuf, stream)
 	assert.NoError(t, err)
 
 	assert.Equal(t, input, outputBuf.String())
 }
 
 func TestWorker_Read_ReadsFromStdout(t *testing.T) {
-	w := worker.NewProcessWorker(zap.NewNop())
-
-	err := w.Start(context.Background(), worker.StartConfig{
+	w := worker.NewProcessWorker(context.Background(), worker.StartConfig{
 		Cmd:  "echo",
 		Args: []string{"foobar"},
-	})
+	}, zap.NewNop())
+
+	stream, err := w.Stream()
+	assert.NoError(t, err)
+
+	defer stream.Close()
+
+	err = w.Start(context.Background())
 	assert.NoError(t, err)
 
 	defer w.Terminate()
 
 	var outputBuf bytes.Buffer
-	_, err = io.Copy(&outputBuf, w)
+	_, err = io.Copy(&outputBuf, stream)
 	assert.NoError(t, err)
 
 	assert.Equal(t, "foobar\n", outputBuf.String())
