@@ -8,6 +8,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// AdapterWorkerFactoryFn is a type alias for a function that creates a worker
+// based on the given context and configuration.
 type AdapterWorkerFactoryFn func(context.Context, worker.StartConfig) (worker.Worker, error)
 
 // AdapterFactoryFn is a type alias for a function that creates an adapter

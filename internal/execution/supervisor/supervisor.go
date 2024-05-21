@@ -46,7 +46,7 @@ type WorkerSupervisor[I, O any] struct {
 
 	sendLock sync.Mutex
 
-	createWorker func() (Adapter[I, O], error)
+	createAdapter func() (Adapter[I, O], error)
 
 	worker     Adapter[I, O]
 	workerLock sync.Mutex
@@ -140,7 +140,7 @@ func New[I, O any](params Params[I, O]) (Supervisor[I, O], error) {
 		return params.WorkerFactory(ctx, config, params.Log)
 	}
 
-	createWorker := func() (Adapter[I, O], error) {
+	createAdapter := func() (Adapter[I, O], error) {
 		adapter, err := params.AdapterFactory(
 			workerFactory,
 			config.Interface,
@@ -154,12 +154,12 @@ func New[I, O any](params Params[I, O]) (Supervisor[I, O], error) {
 	}
 
 	return &WorkerSupervisor[I, O]{
-		persistent:   config.Persistent,
-		createWorker: createWorker,
-		startParams:  config.StartParams,
-		stopParams:   config.StopParams,
-		sendParams:   config.SendParams,
-		log:          params.Log.Named("supervisor"),
+		createAdapter: createAdapter,
+		persistent:    config.Persistent,
+		startParams:   config.StartParams,
+		stopParams:    config.StopParams,
+		sendParams:    config.SendParams,
+		log:           params.Log.Named("supervisor"),
 	}, nil
 }
 
@@ -295,7 +295,7 @@ func (s *WorkerSupervisor[I, O]) terminateWorker() (ReleaseFunc, error) {
 func (s *WorkerSupervisor[I, O]) bootWorker(
 	ctx context.Context,
 ) (Adapter[I, O], error) {
-	worker, err := s.createWorker()
+	worker, err := s.createAdapter()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create worker: %w", err)
 	}
