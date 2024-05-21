@@ -98,20 +98,20 @@ func (w *ProcessWorker) Start(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	// return if the worker is already started
+	if w.cmd.Process != nil {
+		return ErrWorkerAlreadyStarted
+	}
+
 	w.log.With(
 		zap.Strings("args", w.cmd.Args),
 		zap.String("cwd", w.cmd.Dir),
 		zap.Strings("env", w.cmd.Environ()),
 	).Debug("starting process")
 
-	// return if the worker is already started
-	if w.cmd.Process != nil {
-		return ErrWorkerAlreadyStarted
-	}
-
 	// exit early if the context is already cancelled
 	if ctx.Err() != nil {
-		return fmt.Errorf("failed to start process: %w", ctx.Err())
+		return fmt.Errorf("won't start process: %w", ctx.Err())
 	}
 
 	// create a pipe for stderr
