@@ -15,6 +15,7 @@ jobs:
     env:
       VERSION: ${{ github.ref_name }}
       COMMIT: ${{ github.sha }}
+      BINARY_NAME: ${{ matrix.os == 'windows' && 'shimmy.exe' || 'shimmy' }}
     strategy:
       matrix:
         include:
@@ -49,7 +50,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: shimmy-${{ matrix.os }}-${{ matrix.arch }}
-          path: ./bin/shimmy
+          path: ./bin/${{ env.BINARY_NAME }}
 
   # TODO: Test on windows
   test:

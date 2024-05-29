@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -279,24 +278,6 @@ func (w *ProcessWorker) halt(force bool) error {
 	return nil
 }
 
-func (p *ProcessWorker) killProcess(force bool) error {
-	if runtime.GOOS == "windows" {
-		// on windows, we can't send signals, so we use `process.Kill()`
-		return p.cmd.Process.Kill()
-	} else {
-		signal := syscall.SIGTERM
-		if force {
-			signal = syscall.SIGKILL
-		}
-		if pgid, err := syscall.Getpgid(p.cmd.Process.Pid); err == nil {
-			// Negative pid sends signal to all in process group
-			return syscall.Kill(-pgid, signal)
-		} else {
-			return syscall.Kill(p.cmd.Process.Pid, signal)
-		}
-	}
-}
-
 func (w *ProcessWorker) Pid() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -450,7 +431,7 @@ func createCmd(ctx context.Context, config StartConfig) *exec.Cmd {
 	// as we could run into deadlocks otherwise, if the system's stdout
 	// or stderr buffers run full.
 
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	initCmd(cmd)
 
 	return cmd
 }
