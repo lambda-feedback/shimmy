@@ -49,11 +49,16 @@ func TestFileAdapter_Send(t *testing.T) {
 	ctx := context.Background()
 	data := map[string]any{"foo": "bar"}
 
+	var requestFileName string
+	var responseFileName string
+
 	// for the adapter to succeed, the worker process must write to
 	// the response file before exiting. we mock this behaviour here.
 	w.EXPECT().Start(mock.Anything).RunAndReturn(func(ctx context.Context) error {
-		data, _ := os.ReadFile(sp.Args[len(sp.Args)-2])
-		_ = os.WriteFile(sp.Args[len(sp.Args)-1], data, os.ModeAppend)
+		requestFileName = sp.Args[len(sp.Args)-2]
+		responseFileName = sp.Args[len(sp.Args)-1]
+		data, _ := os.ReadFile(requestFileName)
+		_ = os.WriteFile(responseFileName, data, os.ModeAppend)
 		return nil
 	})
 	w.EXPECT().ReadPipe().Return(io.NopCloser(strings.NewReader("")), nil)
@@ -64,6 +69,12 @@ func TestFileAdapter_Send(t *testing.T) {
 	err := a.Send(ctx, &res, "test", data, 10)
 	assert.NoError(t, err)
 	assert.Equal(t, map[string]any{"method": "test", "params": data}, res)
+
+	// check that the request and response files were cleaned up
+	_, err = os.Stat(requestFileName)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(responseFileName)
+	assert.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestFileAdapter_Send_ReturnsStartError(t *testing.T) {

@@ -24,7 +24,8 @@ type fileAdapter struct {
 	workerFactory AdapterWorkerFactoryFn
 
 	// startParams is the start configuration that is used to start the worker.
-	// The file adapter does not start the worker during
+	// The file adapter does not start the worker during Start, but instead
+	// uses the startParams to start the worker during Send.
 	startParams worker.StartConfig
 
 	log *zap.Logger
