@@ -19,7 +19,7 @@ import (
 // fileAdapter is an adapter that allows supervisors to use files to
 // communicate with their worker. This is useful when stdio or sockets
 // can't be used for communication.
-type fileAdapter[I, O any] struct {
+type fileAdapter struct {
 	// workerFactory is the worker that is managed by the adapter.
 	workerFactory AdapterWorkerFactoryFn
 
@@ -30,19 +30,19 @@ type fileAdapter[I, O any] struct {
 	log *zap.Logger
 }
 
-var _ Adapter[any, any] = (*fileAdapter[any, any])(nil)
+var _ Adapter = (*fileAdapter)(nil)
 
-func newFileAdapter[I, O any](
+func newFileAdapter(
 	workerFactory AdapterWorkerFactoryFn,
 	log *zap.Logger,
-) *fileAdapter[I, O] {
-	return &fileAdapter[I, O]{
+) *fileAdapter {
+	return &fileAdapter{
 		workerFactory: workerFactory,
 		log:           log.Named("adapter_file"),
 	}
 }
 
-func (a *fileAdapter[I, O]) Start(
+func (a *fileAdapter) Start(
 	ctx context.Context,
 	params worker.StartConfig,
 ) error {
@@ -55,15 +55,15 @@ func (a *fileAdapter[I, O]) Start(
 	return nil
 }
 
-func (a *fileAdapter[I, O]) Send(
+func (a *fileAdapter) Send(
 	ctx context.Context,
-	data I,
+	result any,
+	method string,
+	data map[string]any,
 	timeout time.Duration,
-) (O, error) {
-	var out O
-
+) error {
 	if a.workerFactory == nil {
-		return out, errors.New("no worker factory provided")
+		return errors.New("no worker factory provided")
 	}
 
 	// temp dir path
@@ -72,19 +72,19 @@ func (a *fileAdapter[I, O]) Send(
 	// create temp dir if it doesn't exist
 	err := os.Mkdir(workingDir, 0755)
 	if err != nil && !errors.Is(err, os.ErrExist) {
-		return out, fmt.Errorf("error creating working dir: %w", err)
+		return fmt.Errorf("error creating working dir: %w", err)
 	}
 
 	// create temp dir for request and response files
 	tmpPath, err := os.MkdirTemp(workingDir, "*")
 	if err != nil {
-		return out, fmt.Errorf("error creating temp dir: %w", err)
+		return fmt.Errorf("error creating temp dir: %w", err)
 	}
 
 	// create temp files for request and response data
 	reqFile, err := os.CreateTemp(tmpPath, "request-data-*")
 	if err != nil {
-		return out, fmt.Errorf("error creating temp file: %w", err)
+		return fmt.Errorf("error creating temp file: %w", err)
 	}
 	defer func() {
 		if err := os.Remove(reqFile.Name()); err != nil {
@@ -94,7 +94,7 @@ func (a *fileAdapter[I, O]) Send(
 
 	resFile, err := os.CreateTemp(tmpPath, "response-data-*")
 	if err != nil {
-		return out, fmt.Errorf("error creating temp file: %w", err)
+		return fmt.Errorf("error creating temp file: %w", err)
 	}
 
 	defer func() {
@@ -109,14 +109,19 @@ func (a *fileAdapter[I, O]) Send(
 		}
 	}()
 
-	// write data to request file
-	if err := json.NewEncoder(reqFile).Encode(data); err != nil {
-		return out, fmt.Errorf("error writing request data: %w", err)
+	message := map[string]any{
+		"method": method,
+		"params": data,
+	}
+
+	// write message to request file
+	if err := json.NewEncoder(reqFile).Encode(message); err != nil {
+		return fmt.Errorf("error writing request data: %w", err)
 	}
 
 	// close & flush request file
 	if err := reqFile.Close(); err != nil {
-		return out, fmt.Errorf("error closing request file: %w", err)
+		return fmt.Errorf("error closing request file: %w", err)
 	}
 
 	startParams := a.startParams
@@ -138,12 +143,12 @@ func (a *fileAdapter[I, O]) Send(
 	// create the worker with modified args and env
 	worker, err := a.workerFactory(ctx, startParams)
 	if err != nil {
-		return out, fmt.Errorf("error creating worker: %w", err)
+		return fmt.Errorf("error creating worker: %w", err)
 	}
 
 	pipe, err := worker.ReadPipe()
 	if err != nil {
-		return out, fmt.Errorf("error getting read pipe: %w", err)
+		return fmt.Errorf("error getting read pipe: %w", err)
 	}
 
 	var stdoutWg sync.WaitGroup
@@ -165,7 +170,7 @@ func (a *fileAdapter[I, O]) Send(
 	}()
 
 	if err := worker.Start(ctx); err != nil {
-		return out, fmt.Errorf("error starting process: %w", err)
+		return fmt.Errorf("error starting process: %w", err)
 	}
 
 	stdoutWg.Wait()
@@ -173,22 +178,22 @@ func (a *fileAdapter[I, O]) Send(
 	// wait for worker to terminate (find another way to read res earlier?)
 	exitEvent, err := worker.WaitFor(ctx, timeout)
 	if err != nil {
-		return out, fmt.Errorf("error waiting for process: %w", err)
+		return fmt.Errorf("error waiting for process: %w", err)
 	}
 
 	if !exitEvent.Success() {
-		return out, fmt.Errorf("process exited with non-zero code: %s", exitEvent.String())
+		return fmt.Errorf("process exited with non-zero code: %s", exitEvent.String())
 	}
 
 	// read and decode response data from res file
-	if err := json.NewDecoder(resFile).Decode(&out); err != nil {
-		return out, fmt.Errorf("error decoding response data: %w", err)
+	if err := json.NewDecoder(resFile).Decode(&result); err != nil {
+		return fmt.Errorf("error decoding response data: %w", err)
 	}
 
-	return out, nil
+	return nil
 }
 
-func (a *fileAdapter[I, O]) Stop(
+func (a *fileAdapter) Stop(
 	worker.StopConfig,
 ) (ReleaseFunc, error) {
 	// for fileio, we already stopped the worker, as we do need to wait

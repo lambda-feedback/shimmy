@@ -10,19 +10,21 @@ import (
 
 // Runtime is the interface for a runtime.
 type Runtime interface {
-	Handle(context.Context, Message) (Message, error)
+	Handle(context.Context, EvaluationRequest) (EvaluationResponse, error)
+
 	Start(context.Context) error
+
 	Shutdown(context.Context) error
 }
 
 // Params is the runtime-specific params type.
-type Params = execution.Params[Message, Message]
+type Params = execution.Params
 
 // Dispatcher is the runtime-specific dispatcher type.
-type Dispatcher = execution.Dispatcher[Message, Message]
+type Dispatcher = execution.Dispatcher
 
 // Config is the runtime-specific type for the config.
-type Config = execution.Config[Message, Message]
+type Config = execution.Config
 
 // EvaluationRuntime is a runtime that uses the execution manager.
 type EvaluationRuntime struct {
@@ -83,8 +85,15 @@ func (r *EvaluationRuntime) Start(ctx context.Context) error {
 	return r.dispatcher.Start(ctx)
 }
 
-func (r *EvaluationRuntime) Handle(ctx context.Context, message Message) (Message, error) {
-	return r.dispatcher.Send(ctx, message)
+func (r *EvaluationRuntime) Handle(
+	ctx context.Context,
+	message EvaluationRequest,
+) (EvaluationResponse, error) {
+	var result EvaluationResponse
+
+	err := r.dispatcher.Send(ctx, &result, string(message.Command), message.Data)
+
+	return result, err
 }
 
 func (r *EvaluationRuntime) Shutdown(ctx context.Context) error {

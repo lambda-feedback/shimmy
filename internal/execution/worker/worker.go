@@ -58,9 +58,9 @@ type Worker interface {
 	// without waiting for the process to start.
 	Start(context.Context) error
 
-	// Terminate terminates the worker. The method returns
-	// immediately, without waiting for the process to stop.
-	Terminate() error
+	// Stop stops the worker. The method returns immediately,
+	// without waiting for the process to stop.
+	Stop() error
 
 	// Wait blocks until the process exits. The method
 	// returns an ExitEvent that contains the exit status
@@ -245,9 +245,9 @@ func (w *ProcessWorker) WaitFor(
 	return w.Wait(waitCtx)
 }
 
-// Terminate sends a SIGTERM signal to the worker process. The method
+// Stop sends a SIGTERM signal to the worker process. The method
 // returns immediately, without waiting for the process to stop.
-func (w *ProcessWorker) Terminate() error {
+func (w *ProcessWorker) Stop() error {
 	return w.halt(false)
 }
 
