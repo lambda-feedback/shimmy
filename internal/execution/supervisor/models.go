@@ -3,9 +3,8 @@ package supervisor
 import "errors"
 
 var (
-	ErrUnsupportedIOInterface  = errors.New("unsupported io interface")
-	ErrUnsupportedIOTransport  = errors.New("unsupported io transport")
-	ErrInvalidPersistentFileIO = errors.New("persistent workers are not supported for file IO yet")
+	ErrUnsupportedIOInterface = errors.New("unsupported io interface")
+	ErrUnsupportedIOTransport = errors.New("unsupported io transport")
 )
 
 // IOInterface describes the interface used to communicate with the worker
@@ -23,9 +22,9 @@ const (
 type IOTransport string
 
 const (
-	// IPCTransport describes communication w/ processes over IPC.
+	// IpcTransport describes communication w/ processes over IPC.
 	// This can be unix sockets or windows named pipes, depending on the OS.
-	IPCTransport IOTransport = "unix"
+	IpcTransport IOTransport = "ipc"
 
 	// Http describes communication w/ processes over http
 	HttpTransport IOTransport = "http"

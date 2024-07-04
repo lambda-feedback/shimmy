@@ -33,7 +33,7 @@ type Params struct {
 func NewDispatcher(
 	params Params,
 ) (dispatcher.Dispatcher, error) {
-	if params.Config.Supervisor.Persistent {
+	if params.Config.Supervisor.IO.Interface == supervisor.RpcIO {
 		return dispatcher.NewDedicatedDispatcher(
 			dispatcher.DedicatedDispatcherParams{
 				Config: dispatcher.DedicatedDispatcherConfig{

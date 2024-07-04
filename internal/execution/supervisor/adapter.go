@@ -52,7 +52,7 @@ func defaultAdapterFactory(
 	case FileIO:
 		return newFileAdapter(workerFactory, log), nil
 	case RpcIO:
-		return newRpcAdapter(workerFactory, config.RpcConfig, log), nil
+		return newRpcAdapter(workerFactory, config.Rpc, log), nil
 	default:
 		return nil, ErrUnsupportedIOInterface
 	}

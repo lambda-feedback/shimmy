@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"time"
 
 	"github.com/ethereum/go-ethereum/rpc"
@@ -38,8 +39,8 @@ type RpcConfig struct {
 	// HttpTransport is the configuration for the http transport.
 	Http HttpTransportConfig `conf:"http"`
 
-	// IPCTransportConfig is the configuration for the IPC transport.
-	IPC IPCTransportConfig `conf:"ipc"`
+	// IPCTransportConfig is the configuration for the Ipc transport.
+	Ipc IpcTransportConfig `conf:"ipc"`
 
 	// WsTransport is the configuration for the websocket transport.
 	Ws WsTransportConfig `conf:"ws"`
@@ -51,11 +52,11 @@ type HttpTransportConfig struct {
 	Url string `conf:"url"`
 }
 
-// IPCTransportConfig describes the configuration for unix socket transport.
-type IPCTransportConfig struct {
+// IpcTransportConfig describes the configuration for unix socket transport.
+type IpcTransportConfig struct {
 	// Endpoint is the full path to the unix socket or
 	// the name of the windows named pipe.
-	Endpoint string `conf:"path"`
+	Endpoint string `conf:"endpoint"`
 }
 
 // WsTransportConfig describes the configuration for websocket transport.
@@ -100,6 +101,8 @@ func (a *rpcAdapter) Start(
 		return errors.New("no worker factory provided")
 	}
 
+	params.Env = buildEnv(params.Env, a.config)
+
 	// create the worker
 	worker, err := a.workerFactory(ctx, params)
 	if err != nil {
@@ -127,6 +130,8 @@ func (a *rpcAdapter) Start(
 		return fmt.Errorf("error starting worker: %w", err)
 	}
 
+	time.Sleep(500 * time.Millisecond)
+
 	// dial the rpc client
 	if client, err := a.dialRpc(ctx, a.config); err != nil {
 		return fmt.Errorf("error dialing rpc: %w", err)
@@ -152,7 +157,11 @@ func (a *rpcAdapter) Send(
 		return errors.New("rpc client not available")
 	}
 
-	return a.rpcClient.CallContext(ctx, result, method, []any{data})
+	if err := a.rpcClient.CallContext(ctx, result, method, data); err != nil {
+		return fmt.Errorf("error sending rpc request: %w", err)
+	}
+
+	return nil
 }
 
 func (a *rpcAdapter) Stop(
@@ -181,8 +190,8 @@ func (a *rpcAdapter) dialRpc(
 		}
 
 		return rpc.DialIO(ctx, a.stdioPipe, a.stdioPipe)
-	case IPCTransport:
-		return rpc.DialIPC(ctx, config.IPC.Endpoint)
+	case IpcTransport:
+		return rpc.DialIPC(ctx, getIPCEndpoint(config.Ipc))
 	case HttpTransport:
 		// TODO: use custom client
 		return rpc.DialHTTP(config.Http.Url)
@@ -193,4 +202,38 @@ func (a *rpcAdapter) dialRpc(
 	}
 
 	return nil, ErrUnsupportedIOTransport
+}
+
+func getIPCEndpoint(config IpcTransportConfig) string {
+	if config.Endpoint != "" {
+		return config.Endpoint
+	}
+
+	if runtime.GOOS == "windows" {
+		return `\\.\pipe\eval`
+	} else {
+		return "/tmp/eval.sock"
+	}
+}
+
+func buildEnv(env []string, config RpcConfig) []string {
+	if env == nil {
+		env = make([]string, 0)
+	}
+
+	env = append(env,
+		"EVAL_IO=rpc",
+		"EVAL_RPC_TRANSPORT="+string(config.Transport),
+	)
+
+	switch config.Transport {
+	case IpcTransport:
+		env = append(env, "EVAL_RPC_IPC_ENDPOINT="+getIPCEndpoint(config.Ipc))
+	case HttpTransport:
+		env = append(env, "EVAL_RPC_HTTP_URL="+config.Http.Url)
+	case WsTransport:
+		env = append(env, "EVAL_RPC_WS_URL="+config.Ws.Url)
+	}
+
+	return env
 }

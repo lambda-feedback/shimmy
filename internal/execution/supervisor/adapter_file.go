@@ -132,13 +132,14 @@ func (a *fileAdapter) Send(
 
 	// ensure env is not nil
 	if startParams.Env == nil {
-		startParams.Env = make([]string, 0, 2)
+		startParams.Env = make([]string, 0, 3)
 	}
 
 	// append req and res file names to worker env
 	startParams.Env = append(startParams.Env,
-		"REQUEST_FILE_NAME="+reqFile.Name(),
-		"RESPONSE_FILE_NAME="+resFile.Name(),
+		"EVAL_IO=FILE",
+		"EVAL_REQUEST_FILE_NAME="+reqFile.Name(),
+		"EVAL_RESPONSE_FILE_NAME="+resFile.Name(),
 	)
 
 	// create the worker with modified args and env

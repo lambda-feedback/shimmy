@@ -35,16 +35,11 @@ type IOConfig struct {
 	// Default is "rpc".
 	Interface IOInterface `conf:"interface"`
 
-	// RpcConfig is the configuration for the rpc interface.
-	RpcConfig RpcConfig `conf:"rpc"`
+	// Rpc is the configuration for the rpc interface.
+	Rpc RpcConfig `conf:"rpc"`
 }
 
 type Config struct {
-	// Persistent indicates whether the underlying worker can handle
-	// multiple messages, or if it is transient. Only valid for rpc-
-	// based workers. Default is `false`.
-	Persistent bool `conf:"persistent"`
-
 	// IO is the IO config to use for the worker.
 	IO IOConfig `conf:"io"`
 

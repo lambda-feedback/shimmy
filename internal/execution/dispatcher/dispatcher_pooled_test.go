@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestPooledDispatcher_New_FailsInvalidCapacity(t *testing.T) {
+func TestPooledDispatcher_New_UsesCPUCoreFallback(t *testing.T) {
 	m, err := dispatcher.NewPooledDispatcher(dispatcher.PooledDispatcherParams{
 		Config: dispatcher.PooledDispatcherConfig{
 			MaxWorkers: 0,
@@ -20,8 +20,8 @@ func TestPooledDispatcher_New_FailsInvalidCapacity(t *testing.T) {
 		Context: context.Background(),
 		Log:     zap.NewNop(),
 	})
-	assert.Error(t, err)
-	assert.Nil(t, m)
+	assert.NoError(t, err)
+	assert.NotNil(t, m)
 }
 
 func TestPooledDispatcher_New_CreatesNewDispatcher(t *testing.T) {

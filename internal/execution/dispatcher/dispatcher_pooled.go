@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"fmt"
+	"runtime"
 
 	"github.com/jackc/puddle/v2"
 	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
@@ -183,9 +184,16 @@ func createPool(
 		}
 	}
 
+	// if the max workers is less than or equal to 0,
+	// default to the number of logical CPUs
+	maxWorkers := params.Config.MaxWorkers
+	if maxWorkers <= 0 {
+		maxWorkers = runtime.NumCPU()
+	}
+
 	return puddle.NewPool(&puddle.Config[supervisor.Supervisor]{
 		Constructor: constructor,
 		Destructor:  destructor,
-		MaxSize:     int32(params.Config.MaxWorkers),
+		MaxSize:     int32(maxWorkers),
 	})
 }

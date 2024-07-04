@@ -83,8 +83,6 @@ func (m *DedicatedDispatcher) Send(
 		return fmt.Errorf("error releasing worker: %w", err)
 	}
 
-	m.log.Debug("message sent")
-
 	return nil
 }
 

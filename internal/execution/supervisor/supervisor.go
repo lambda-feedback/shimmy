@@ -71,11 +71,6 @@ type Params struct {
 func New(params Params) (Supervisor, error) {
 	config := params.Config
 
-	// validate params
-	if config.IO.Interface == FileIO && config.Persistent {
-		return nil, ErrInvalidPersistentFileIO
-	}
-
 	if params.WorkerFactory == nil {
 		params.WorkerFactory = defaultWorkerFactory
 	}
@@ -104,9 +99,11 @@ func New(params Params) (Supervisor, error) {
 		return adapter, nil
 	}
 
+	persistent := config.IO.Interface != FileIO
+
 	return &WorkerSupervisor{
 		createAdapter: createAdapter,
-		persistent:    config.Persistent,
+		persistent:    persistent,
 		startParams:   config.StartParams,
 		stopParams:    config.StopParams,
 		sendParams:    config.SendParams,
@@ -250,8 +247,7 @@ func (s *WorkerSupervisor) bootWorker(
 		return nil, fmt.Errorf("failed to create worker: %w", err)
 	}
 
-	err = worker.Start(ctx, s.startParams)
-	if err != nil {
+	if err = worker.Start(ctx, s.startParams); err != nil {
 		return nil, fmt.Errorf("failed to start worker: %w", err)
 	}
 

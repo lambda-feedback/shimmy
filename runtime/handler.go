@@ -135,6 +135,8 @@ func (h *RuntimeHandler) handle(ctx context.Context, req Request) ([]byte, error
 		return nil, err
 	}
 
+	h.log.Debug("response message", zap.Any("response", responseMsg))
+
 	// Validate the response data against the response schema
 	err = h.validate(validationTypeResponse, command, responseMsg)
 	if err != nil {
