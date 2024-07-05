@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"runtime"
 	"time"
 
@@ -130,17 +131,12 @@ func (a *rpcAdapter) Start(
 		return fmt.Errorf("error starting worker: %w", err)
 	}
 
-	// TODO: remove this sleep
-	time.Sleep(5 * time.Second)
-
 	// dial the rpc client
-	if client, err := a.dialRpc(ctx, a.config); err != nil {
-		return fmt.Errorf("error dialing rpc: %w", err)
-	} else {
-		a.rpcClient = client
-	}
-
-	return nil
+	return a.dialRpcWithRetry(
+		ctx,
+		100*time.Millisecond,
+		10*time.Second,
+	)
 }
 
 func (a *rpcAdapter) Send(
@@ -174,6 +170,36 @@ func (a *rpcAdapter) Stop(
 	}
 
 	return stopWorker(a.worker, params)
+}
+
+func (a *rpcAdapter) dialRpcWithRetry(
+	ctx context.Context,
+	baseDelay time.Duration,
+	maxDelay time.Duration,
+) error {
+	var err error
+	for i := 0; ; i++ {
+		if client, err := a.dialRpc(ctx, a.config); err == nil {
+			a.rpcClient = client
+			return nil
+		}
+
+		// Calculate the backoff delay with a cap at maxDelay
+		backoffDelay := baseDelay * time.Duration(math.Pow(2, float64(i)))
+		if backoffDelay > maxDelay {
+			backoffDelay = maxDelay
+		}
+
+		// Wait for the backoff delay or until the context is done
+		select {
+		case <-time.After(backoffDelay):
+			// Continue to the next retry
+			a.log.Debug("error dialing rpc, retrying", zap.Error(err))
+		case <-ctx.Done():
+			// Context canceled or timeout reached
+			return fmt.Errorf("error dialing rpc: %w", err)
+		}
+	}
 }
 
 // dialRpc dials the rpc client based on the given configuration.
