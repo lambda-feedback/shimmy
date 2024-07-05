@@ -131,7 +131,7 @@ func (a *rpcAdapter) Start(
 	}
 
 	// TODO: remove this sleep
-	time.Sleep(1 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// dial the rpc client
 	if client, err := a.dialRpc(ctx, a.config); err != nil {
