@@ -190,11 +190,16 @@ func (a *rpcAdapter) dialRpcWithRetry(
 			backoffDelay = maxDelay
 		}
 
+		a.log.With(
+			zap.Int("retry", i),
+			zap.Duration("backoff", backoffDelay),
+			zap.Error(err),
+		).Debug("error dialing rpc")
+
 		// Wait for the backoff delay or until the context is done
 		select {
 		case <-time.After(backoffDelay):
 			// Continue to the next retry
-			a.log.Debug("error dialing rpc, retrying", zap.Error(err))
 		case <-ctx.Done():
 			// Context canceled or timeout reached
 			return fmt.Errorf("error dialing rpc: %w", err)
