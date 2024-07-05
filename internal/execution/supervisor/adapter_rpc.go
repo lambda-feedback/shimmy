@@ -130,7 +130,8 @@ func (a *rpcAdapter) Start(
 		return fmt.Errorf("error starting worker: %w", err)
 	}
 
-	time.Sleep(500 * time.Millisecond)
+	// TODO: remove this sleep
+	time.Sleep(1 * time.Second)
 
 	// dial the rpc client
 	if client, err := a.dialRpc(ctx, a.config); err != nil {
