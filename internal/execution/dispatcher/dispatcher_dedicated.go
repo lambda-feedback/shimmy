@@ -50,40 +50,33 @@ func NewDedicatedDispatcher(
 }
 
 func (m *DedicatedDispatcher) Start(ctx context.Context) error {
-	m.log.Debug("booting")
-
 	if err := m.supervisor.Start(ctx); err != nil {
 		m.log.Error("error booting", zap.Error(err))
 		return err
 	}
-
-	m.log.Debug("done booting")
 
 	return nil
 }
 
 func (m *DedicatedDispatcher) Send(
 	ctx context.Context,
-	result any,
 	method string,
 	data map[string]any,
-) error {
-	m.log.Debug("sending message")
-
-	release, err := m.supervisor.Send(ctx, result, method, data)
+) (map[string]any, error) {
+	res, err := m.supervisor.Send(ctx, method, data)
 	if err != nil {
 		m.log.Error("error sending message", zap.Error(err))
-		return fmt.Errorf("error sending data: %w", err)
+		return nil, fmt.Errorf("error sending data: %w", err)
 	}
 
 	// TODO: ignore release error?
 	// TODO: move into background goroutine?
-	if err := release(ctx); err != nil {
+	if err := res.Release(ctx); err != nil {
 		m.log.Error("error releasing worker", zap.Error(err))
-		return fmt.Errorf("error releasing worker: %w", err)
+		return nil, fmt.Errorf("error releasing worker: %w", err)
 	}
 
-	return nil
+	return res.Data, nil
 }
 
 // Shutdown stops the dispatcher and waits for all workers to finish.
@@ -105,8 +98,6 @@ func (m *DedicatedDispatcher) Shutdown(ctx context.Context) error {
 		m.log.Error("error waiting for shut down", zap.Error(err))
 		return err
 	}
-
-	m.log.Debug("shut down")
 
 	return nil
 }

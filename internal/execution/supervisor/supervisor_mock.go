@@ -21,29 +21,29 @@ func (_m *MockSupervisor) EXPECT() *MockSupervisor_Expecter {
 	return &MockSupervisor_Expecter{mock: &_m.Mock}
 }
 
-// Send provides a mock function with given fields: ctx, result, method, data
-func (_m *MockSupervisor) Send(ctx context.Context, result interface{}, method string, data map[string]interface{}) (ReleaseFunc, error) {
-	ret := _m.Called(ctx, result, method, data)
+// Send provides a mock function with given fields: ctx, method, data
+func (_m *MockSupervisor) Send(ctx context.Context, method string, data map[string]interface{}) (*Result, error) {
+	ret := _m.Called(ctx, method, data)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Send")
 	}
 
-	var r0 ReleaseFunc
+	var r0 *Result
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, interface{}, string, map[string]interface{}) (ReleaseFunc, error)); ok {
-		return rf(ctx, result, method, data)
+	if rf, ok := ret.Get(0).(func(context.Context, string, map[string]interface{}) (*Result, error)); ok {
+		return rf(ctx, method, data)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, interface{}, string, map[string]interface{}) ReleaseFunc); ok {
-		r0 = rf(ctx, result, method, data)
+	if rf, ok := ret.Get(0).(func(context.Context, string, map[string]interface{}) *Result); ok {
+		r0 = rf(ctx, method, data)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(ReleaseFunc)
+			r0 = ret.Get(0).(*Result)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, interface{}, string, map[string]interface{}) error); ok {
-		r1 = rf(ctx, result, method, data)
+	if rf, ok := ret.Get(1).(func(context.Context, string, map[string]interface{}) error); ok {
+		r1 = rf(ctx, method, data)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -58,26 +58,25 @@ type MockSupervisor_Send_Call struct {
 
 // Send is a helper method to define mock.On call
 //   - ctx context.Context
-//   - result interface{}
 //   - method string
 //   - data map[string]interface{}
-func (_e *MockSupervisor_Expecter) Send(ctx interface{}, result interface{}, method interface{}, data interface{}) *MockSupervisor_Send_Call {
-	return &MockSupervisor_Send_Call{Call: _e.mock.On("Send", ctx, result, method, data)}
+func (_e *MockSupervisor_Expecter) Send(ctx interface{}, method interface{}, data interface{}) *MockSupervisor_Send_Call {
+	return &MockSupervisor_Send_Call{Call: _e.mock.On("Send", ctx, method, data)}
 }
 
-func (_c *MockSupervisor_Send_Call) Run(run func(ctx context.Context, result interface{}, method string, data map[string]interface{})) *MockSupervisor_Send_Call {
+func (_c *MockSupervisor_Send_Call) Run(run func(ctx context.Context, method string, data map[string]interface{})) *MockSupervisor_Send_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(interface{}), args[2].(string), args[3].(map[string]interface{}))
+		run(args[0].(context.Context), args[1].(string), args[2].(map[string]interface{}))
 	})
 	return _c
 }
 
-func (_c *MockSupervisor_Send_Call) Return(_a0 ReleaseFunc, _a1 error) *MockSupervisor_Send_Call {
+func (_c *MockSupervisor_Send_Call) Return(_a0 *Result, _a1 error) *MockSupervisor_Send_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *MockSupervisor_Send_Call) RunAndReturn(run func(context.Context, interface{}, string, map[string]interface{}) (ReleaseFunc, error)) *MockSupervisor_Send_Call {
+func (_c *MockSupervisor_Send_Call) RunAndReturn(run func(context.Context, string, map[string]interface{}) (*Result, error)) *MockSupervisor_Send_Call {
 	_c.Call.Return(run)
 	return _c
 }

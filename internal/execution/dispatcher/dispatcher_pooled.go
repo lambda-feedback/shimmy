@@ -64,30 +64,33 @@ func (m *PooledDispatcher) Start(context.Context) error {
 	return nil
 }
 
-func (m *PooledDispatcher) Send(ctx context.Context, result any, method string, data map[string]any) error {
+func (m *PooledDispatcher) Send(
+	ctx context.Context,
+	method string,
+	data map[string]any,
+) (map[string]any, error) {
 
 	resource, err := m.pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("error acquiring supervisor: %w", err)
+		return nil, fmt.Errorf("error acquiring supervisor: %w", err)
 	}
 
-	err = m.sendToSupervisor(ctx, result, method, data, resource)
+	result, err := m.sendToSupervisor(ctx, method, data, resource)
 	if err != nil {
-		return fmt.Errorf("error sending data: %w", err)
+		return nil, fmt.Errorf("error sending data: %w", err)
 	}
 
-	return nil
+	return result, nil
 }
 
 func (m *PooledDispatcher) sendToSupervisor(
 	ctx context.Context,
-	result any,
 	method string,
 	data map[string]any,
 	resource *puddle.Resource[supervisor.Supervisor],
-) error {
+) (map[string]any, error) {
 	var err error
-	var release supervisor.ReleaseFunc
+	var res *supervisor.Result
 
 	destroyOrRelease := func() {
 		if err != nil {
@@ -101,14 +104,14 @@ func (m *PooledDispatcher) sendToSupervisor(
 
 	dispose := func() {
 		// if there is no wait function, we can release the resource
-		if release == nil {
+		if res == nil || res.Release == nil {
 			destroyOrRelease()
 			return
 		}
 
 		// if there is an error destroying the supervisor, we need to
 		// log it and destroy the resource
-		if releaseErr := release(m.ctx); releaseErr != nil {
+		if releaseErr := res.Release(m.ctx); releaseErr != nil {
 			m.log.Error("destroying supervisor due to error waiting", zap.Error(releaseErr))
 			resource.Destroy()
 			return
@@ -129,17 +132,17 @@ func (m *PooledDispatcher) sendToSupervisor(
 
 	supervisor := resource.Value()
 
-	release, err = supervisor.Send(ctx, result, method, data)
+	res, err = supervisor.Send(ctx, method, data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return res.Data, nil
 }
 
 // Shutdown stops the dispatcher and waits for all workers to finish.
 func (m *PooledDispatcher) Shutdown(context.Context) error {
-	m.log.Debug("shutting down dispatcher")
+	m.log.Debug("shutting down")
 	m.pool.Close()
 	return nil
 }

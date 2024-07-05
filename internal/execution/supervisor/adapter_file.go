@@ -58,13 +58,12 @@ func (a *fileAdapter) Start(
 
 func (a *fileAdapter) Send(
 	ctx context.Context,
-	result any,
 	method string,
 	data map[string]any,
 	timeout time.Duration,
-) error {
+) (map[string]any, error) {
 	if a.workerFactory == nil {
-		return errors.New("no worker factory provided")
+		return nil, errors.New("no worker factory provided")
 	}
 
 	// temp dir path
@@ -73,19 +72,19 @@ func (a *fileAdapter) Send(
 	// create temp dir if it doesn't exist
 	err := os.Mkdir(workingDir, 0755)
 	if err != nil && !errors.Is(err, os.ErrExist) {
-		return fmt.Errorf("error creating working dir: %w", err)
+		return nil, fmt.Errorf("error creating working dir: %w", err)
 	}
 
 	// create temp dir for request and response files
 	tmpPath, err := os.MkdirTemp(workingDir, "*")
 	if err != nil {
-		return fmt.Errorf("error creating temp dir: %w", err)
+		return nil, fmt.Errorf("error creating temp dir: %w", err)
 	}
 
 	// create temp files for request and response data
 	reqFile, err := os.CreateTemp(tmpPath, "request-data-*")
 	if err != nil {
-		return fmt.Errorf("error creating temp file: %w", err)
+		return nil, fmt.Errorf("error creating temp file: %w", err)
 	}
 	defer func() {
 		if err := os.Remove(reqFile.Name()); err != nil {
@@ -95,7 +94,7 @@ func (a *fileAdapter) Send(
 
 	resFile, err := os.CreateTemp(tmpPath, "response-data-*")
 	if err != nil {
-		return fmt.Errorf("error creating temp file: %w", err)
+		return nil, fmt.Errorf("error creating temp file: %w", err)
 	}
 
 	defer func() {
@@ -117,12 +116,12 @@ func (a *fileAdapter) Send(
 
 	// write message to request file
 	if err := json.NewEncoder(reqFile).Encode(message); err != nil {
-		return fmt.Errorf("error writing request data: %w", err)
+		return nil, fmt.Errorf("error writing request data: %w", err)
 	}
 
 	// close & flush request file
 	if err := reqFile.Close(); err != nil {
-		return fmt.Errorf("error closing request file: %w", err)
+		return nil, fmt.Errorf("error closing request file: %w", err)
 	}
 
 	startParams := a.startParams
@@ -138,19 +137,19 @@ func (a *fileAdapter) Send(
 	// append req and res file names to worker env
 	startParams.Env = append(startParams.Env,
 		"EVAL_IO=FILE",
-		"EVAL_REQUEST_FILE_NAME="+reqFile.Name(),
-		"EVAL_RESPONSE_FILE_NAME="+resFile.Name(),
+		"EVAL_FILE_NAME_REQUEST="+reqFile.Name(),
+		"EVAL_FILE_NAME_RESPONSE="+resFile.Name(),
 	)
 
 	// create the worker with modified args and env
 	worker, err := a.workerFactory(ctx, startParams)
 	if err != nil {
-		return fmt.Errorf("error creating worker: %w", err)
+		return nil, fmt.Errorf("error creating worker: %w", err)
 	}
 
 	pipe, err := worker.ReadPipe()
 	if err != nil {
-		return fmt.Errorf("error getting read pipe: %w", err)
+		return nil, fmt.Errorf("error getting read pipe: %w", err)
 	}
 
 	var stdoutWg sync.WaitGroup
@@ -172,7 +171,7 @@ func (a *fileAdapter) Send(
 	}()
 
 	if err := worker.Start(ctx); err != nil {
-		return fmt.Errorf("error starting process: %w", err)
+		return nil, fmt.Errorf("error starting process: %w", err)
 	}
 
 	stdoutWg.Wait()
@@ -180,19 +179,21 @@ func (a *fileAdapter) Send(
 	// wait for worker to terminate (find another way to read res earlier?)
 	exitEvent, err := worker.WaitFor(ctx, timeout)
 	if err != nil {
-		return fmt.Errorf("error waiting for process: %w", err)
+		return nil, fmt.Errorf("error waiting for process: %w", err)
 	}
 
 	if !exitEvent.Success() {
-		return fmt.Errorf("process exited with non-zero code: %s", exitEvent.String())
+		return nil, fmt.Errorf("process exited with non-zero code: %s", exitEvent.String())
 	}
+
+	var response map[string]any
 
 	// read and decode response data from res file
-	if err := json.NewDecoder(resFile).Decode(&result); err != nil {
-		return fmt.Errorf("error decoding response data: %w", err)
+	if err := json.NewDecoder(resFile).Decode(&response); err != nil {
+		return nil, fmt.Errorf("error decoding response data: %w", err)
 	}
 
-	return nil
+	return response, nil
 }
 
 func (a *fileAdapter) Stop(

@@ -36,7 +36,7 @@ type Adapter interface {
 	Stop(worker.StopConfig) (ReleaseFunc, error)
 
 	// Send sends the given data to the worker and returns the response.
-	Send(context.Context, any, string, map[string]any, time.Duration) error
+	Send(context.Context, string, map[string]any, time.Duration) (map[string]any, error)
 }
 
 // MARK: - factory

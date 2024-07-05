@@ -73,6 +73,9 @@ func NewLifecycleRuntime(params RuntimeParams, lc fx.Lifecycle) (Runtime, error)
 	}
 
 	lc.Append(fx.Hook{
+		OnStart: func(context.Context) error {
+			return r.Start(context.Background())
+		},
 		OnStop: func(context.Context) error {
 			return r.Shutdown(context.Background())
 		},
@@ -89,11 +92,7 @@ func (r *EvaluationRuntime) Handle(
 	ctx context.Context,
 	message EvaluationRequest,
 ) (EvaluationResponse, error) {
-	var result EvaluationResponse
-
-	err := r.dispatcher.Send(ctx, &result, string(message.Command), message.Data)
-
-	return result, err
+	return r.dispatcher.Send(ctx, string(message.Command), message.Data)
 }
 
 func (r *EvaluationRuntime) Shutdown(ctx context.Context) error {

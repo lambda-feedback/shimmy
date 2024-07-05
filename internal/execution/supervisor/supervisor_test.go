@@ -112,9 +112,9 @@ func TestSupervisor_Suspend_Transient_StopsWorker(t *testing.T) {
 
 	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
 	a.EXPECT().Stop(mock.Anything).Return(nil, nil)
-	a.EXPECT().Send(mock.Anything, mock.Anything, "test", data, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(nil, nil)
 
-	_, _ = s.Send(context.Background(), nil, "test", data)
+	_, _ = s.Send(context.Background(), "test", data)
 
 	a.AssertCalled(t, "Start", mock.Anything, mock.Anything)
 
@@ -131,9 +131,9 @@ func TestSupervisor_Suspend_Persistent_DoesNotStopWorker(t *testing.T) {
 	data := map[string]any{"data": "data"}
 
 	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
-	a.EXPECT().Send(mock.Anything, mock.Anything, "test", data, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(nil, nil)
 
-	_, _ = s.Send(context.Background(), nil, "test", data)
+	_, _ = s.Send(context.Background(), "test", data)
 
 	a.AssertCalled(t, "Start", mock.Anything, mock.Anything)
 
@@ -151,9 +151,9 @@ func TestSupervisor_Shutdown_Transient_StopsWorker(t *testing.T) {
 
 	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
 	a.EXPECT().Stop(mock.Anything).Return(nil, nil)
-	a.EXPECT().Send(mock.Anything, mock.Anything, "test", data, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(nil, nil)
 
-	_, _ = s.Send(context.Background(), nil, "test", data)
+	_, _ = s.Send(context.Background(), "test", data)
 
 	a.AssertCalled(t, "Start", mock.Anything, mock.Anything)
 
@@ -171,9 +171,9 @@ func TestSupervisor_Shutdown_Persistent_StopsWorker(t *testing.T) {
 
 	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
 	a.EXPECT().Stop(mock.Anything).Return(nil, nil)
-	a.EXPECT().Send(mock.Anything, mock.Anything, "test", data, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(nil, nil)
 
-	_, _ = s.Send(context.Background(), nil, "test", data)
+	_, _ = s.Send(context.Background(), "test", data)
 
 	a.AssertCalled(t, "Start", mock.Anything, mock.Anything)
 
@@ -190,11 +190,11 @@ func TestSupervisor_Send_Persistent_ReusesWorker(t *testing.T) {
 	data := map[string]any{"data": "data"}
 
 	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
-	a.EXPECT().Send(mock.Anything, mock.Anything, "test", data, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(nil, nil)
 
-	_, _ = s.Send(context.Background(), nil, "test", data)
+	_, _ = s.Send(context.Background(), "test", data)
 
-	_, _ = s.Send(context.Background(), nil, "test", data)
+	_, _ = s.Send(context.Background(), "test", data)
 
 	a.AssertNumberOfCalls(t, "Start", 1)
 }
@@ -207,13 +207,13 @@ func TestSupervisor_Send_Transient_DoesNotReuseWorker(t *testing.T) {
 
 	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
 	a.EXPECT().Stop(mock.Anything).Return(nil, nil)
-	a.EXPECT().Send(mock.Anything, mock.Anything, "test", data, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(nil, nil)
 
 	// boots first, transient worker
-	_, _ = s.Send(context.Background(), nil, "test", data)
+	_, _ = s.Send(context.Background(), "test", data)
 
 	// boots second, transient worker
-	_, _ = s.Send(context.Background(), nil, "test", data)
+	_, _ = s.Send(context.Background(), "test", data)
 
 	a.AssertNumberOfCalls(t, "Start", 2)
 	a.AssertNumberOfCalls(t, "Stop", 2)
@@ -223,14 +223,15 @@ func TestSupervisor_Send_SendsData(t *testing.T) {
 	s, a, err := createSupervisor(t, supervisor.RpcIO)
 	assert.NoError(t, err)
 
-	var res any
 	data := map[string]any{"data": "data"}
+	resData := map[string]any{"result": "result"}
 
 	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
-	a.EXPECT().Send(mock.Anything, &res, "test", data, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(resData, nil)
 
-	_, err = s.Send(context.Background(), &res, "test", data)
+	res, err := s.Send(context.Background(), "test", data)
 	assert.NoError(t, err)
+	assert.Equal(t, resData, res.Data)
 }
 
 func TestSupervisor_Send_FailsToAcquireWorker(t *testing.T) {
@@ -243,7 +244,7 @@ func TestSupervisor_Send_FailsToAcquireWorker(t *testing.T) {
 
 	data := map[string]any{"data": "data"}
 
-	res, err := s.Send(context.Background(), nil, "test", data)
+	res, err := s.Send(context.Background(), "test", data)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Nil(t, res)
 }
@@ -252,15 +253,16 @@ func TestSupervisor_Send_FailsToReleaseWorker(t *testing.T) {
 	s, a, err := createSupervisor(t, supervisor.FileIO)
 	assert.NoError(t, err)
 
-	var res any
 	data := map[string]any{"data": "data"}
+	resData := map[string]any{"result": "result"}
 
 	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
 	a.EXPECT().Stop(mock.Anything).Return(nil, assert.AnError)
-	a.EXPECT().Send(mock.Anything, &res, "test", data, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(resData, nil)
 
-	_, err = s.Send(context.Background(), &res, "test", data)
+	res, err := s.Send(context.Background(), "test", data)
 	assert.NoError(t, err)
+	assert.Equal(t, resData, res.Data)
 }
 
 func TestSupervisor_Send_Fails(t *testing.T) {
@@ -270,9 +272,9 @@ func TestSupervisor_Send_Fails(t *testing.T) {
 	data := map[string]any{"data": "data"}
 
 	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
-	a.EXPECT().Send(mock.Anything, mock.Anything, "test", data, mock.Anything).Return(assert.AnError)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(nil, assert.AnError)
 
-	res, err := s.Send(context.Background(), nil, "test", data)
+	res, err := s.Send(context.Background(), "test", data)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.NotNil(t, res)
 }

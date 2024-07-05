@@ -73,14 +73,6 @@ functions on arbitrary, serverless platforms.`
 				Category: "function",
 				EnvVars:  []string{"FUNCTION_ENV"},
 			},
-			&cli.BoolFlag{
-				Name:     "persistent",
-				Usage:    "the worker process is capable of handling more than one event.",
-				Aliases:  []string{"p"},
-				Value:    false,
-				Category: "function",
-				EnvVars:  []string{"FUNCTION_PERSISTENT"},
-			},
 			&cli.IntFlag{
 				Name:        "max-workers",
 				Usage:       "the maximum number of worker processes to run concurrently.",
@@ -226,7 +218,6 @@ func parseRootConfig(ctx *cli.Context) (config.Config, error) {
 	// map cli flags to config fields
 	cliMap := map[string]string{
 		"max-workers":                "runtime.max_workers",
-		"persistent":                 "runtime.persistent",
 		"command":                    "runtime.cmd",
 		"cwd":                        "runtime.cwd",
 		"arg":                        "runtime.arg",

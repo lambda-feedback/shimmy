@@ -144,24 +144,25 @@ func (a *rpcAdapter) Start(
 
 func (a *rpcAdapter) Send(
 	ctx context.Context,
-	result any,
 	method string,
 	data map[string]any,
 	timeout time.Duration,
-) error {
+) (map[string]any, error) {
 	if a.worker == nil {
-		return errors.New("no worker provided")
+		return nil, errors.New("no worker provided")
 	}
 
 	if a.rpcClient == nil {
-		return errors.New("rpc client not available")
+		return nil, errors.New("rpc client not available")
 	}
 
-	if err := a.rpcClient.CallContext(ctx, result, method, data); err != nil {
-		return fmt.Errorf("error sending rpc request: %w", err)
+	var result map[string]any
+
+	if err := a.rpcClient.CallContext(ctx, &result, method, data); err != nil {
+		return nil, fmt.Errorf("error sending rpc request: %w", err)
 	}
 
-	return nil
+	return map[string]any{"result": result, "command": method}, nil
 }
 
 func (a *rpcAdapter) Stop(

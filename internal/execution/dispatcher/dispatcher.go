@@ -8,7 +8,7 @@ import (
 
 type Dispatcher interface {
 	// Send sends data to a supervisor and returns the result
-	Send(context.Context, any, string, map[string]any) error
+	Send(context.Context, string, map[string]any) (map[string]any, error)
 
 	// Start starts the dispatcher and all workers
 	Start(context.Context) error

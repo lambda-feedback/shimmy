@@ -24,22 +24,34 @@ func (_m *MockAdapter) EXPECT() *MockAdapter_Expecter {
 	return &MockAdapter_Expecter{mock: &_m.Mock}
 }
 
-// Send provides a mock function with given fields: _a0, _a1, _a2, _a3, _a4
-func (_m *MockAdapter) Send(_a0 context.Context, _a1 interface{}, _a2 string, _a3 map[string]interface{}, _a4 time.Duration) error {
-	ret := _m.Called(_a0, _a1, _a2, _a3, _a4)
+// Send provides a mock function with given fields: _a0, _a1, _a2, _a3
+func (_m *MockAdapter) Send(_a0 context.Context, _a1 string, _a2 map[string]interface{}, _a3 time.Duration) (map[string]interface{}, error) {
+	ret := _m.Called(_a0, _a1, _a2, _a3)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Send")
 	}
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, interface{}, string, map[string]interface{}, time.Duration) error); ok {
-		r0 = rf(_a0, _a1, _a2, _a3, _a4)
+	var r0 map[string]interface{}
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, map[string]interface{}, time.Duration) (map[string]interface{}, error)); ok {
+		return rf(_a0, _a1, _a2, _a3)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, map[string]interface{}, time.Duration) map[string]interface{}); ok {
+		r0 = rf(_a0, _a1, _a2, _a3)
 	} else {
-		r0 = ret.Error(0)
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]interface{})
+		}
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func(context.Context, string, map[string]interface{}, time.Duration) error); ok {
+		r1 = rf(_a0, _a1, _a2, _a3)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // MockAdapter_Send_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Send'
@@ -49,27 +61,26 @@ type MockAdapter_Send_Call struct {
 
 // Send is a helper method to define mock.On call
 //   - _a0 context.Context
-//   - _a1 interface{}
-//   - _a2 string
-//   - _a3 map[string]interface{}
-//   - _a4 time.Duration
-func (_e *MockAdapter_Expecter) Send(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}, _a4 interface{}) *MockAdapter_Send_Call {
-	return &MockAdapter_Send_Call{Call: _e.mock.On("Send", _a0, _a1, _a2, _a3, _a4)}
+//   - _a1 string
+//   - _a2 map[string]interface{}
+//   - _a3 time.Duration
+func (_e *MockAdapter_Expecter) Send(_a0 interface{}, _a1 interface{}, _a2 interface{}, _a3 interface{}) *MockAdapter_Send_Call {
+	return &MockAdapter_Send_Call{Call: _e.mock.On("Send", _a0, _a1, _a2, _a3)}
 }
 
-func (_c *MockAdapter_Send_Call) Run(run func(_a0 context.Context, _a1 interface{}, _a2 string, _a3 map[string]interface{}, _a4 time.Duration)) *MockAdapter_Send_Call {
+func (_c *MockAdapter_Send_Call) Run(run func(_a0 context.Context, _a1 string, _a2 map[string]interface{}, _a3 time.Duration)) *MockAdapter_Send_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(interface{}), args[2].(string), args[3].(map[string]interface{}), args[4].(time.Duration))
+		run(args[0].(context.Context), args[1].(string), args[2].(map[string]interface{}), args[3].(time.Duration))
 	})
 	return _c
 }
 
-func (_c *MockAdapter_Send_Call) Return(_a0 error) *MockAdapter_Send_Call {
-	_c.Call.Return(_a0)
+func (_c *MockAdapter_Send_Call) Return(_a0 map[string]interface{}, _a1 error) *MockAdapter_Send_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *MockAdapter_Send_Call) RunAndReturn(run func(context.Context, interface{}, string, map[string]interface{}, time.Duration) error) *MockAdapter_Send_Call {
+func (_c *MockAdapter_Send_Call) RunAndReturn(run func(context.Context, string, map[string]interface{}, time.Duration) (map[string]interface{}, error)) *MockAdapter_Send_Call {
 	_c.Call.Return(run)
 	return _c
 }

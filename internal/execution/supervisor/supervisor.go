@@ -19,7 +19,7 @@ type Supervisor interface {
 	// this will acquire the worker and send the message. If the worker
 	// is transient, this will boot a new worker, send the message, and
 	// terminate the worker.
-	Send(ctx context.Context, result any, method string, data map[string]any) (ReleaseFunc, error)
+	Send(ctx context.Context, method string, data map[string]any) (*Result, error)
 
 	// Suspend suspends the worker. If the worker is persistent, this
 	// will release the worker. If the worker is transient, this will
@@ -68,6 +68,11 @@ type Params struct {
 	Log *zap.Logger
 }
 
+type Result struct {
+	Data    map[string]any
+	Release ReleaseFunc
+}
+
 func New(params Params) (Supervisor, error) {
 	config := params.Config
 
@@ -99,7 +104,8 @@ func New(params Params) (Supervisor, error) {
 		return adapter, nil
 	}
 
-	persistent := config.IO.Interface != FileIO
+	// the worker is persistent if the IO interface is RPC
+	persistent := config.IO.Interface == RpcIO
 
 	return &WorkerSupervisor{
 		createAdapter: createAdapter,
@@ -114,11 +120,8 @@ func New(params Params) (Supervisor, error) {
 func (s *WorkerSupervisor) Start(ctx context.Context) error {
 	// if the worker is transient, this is a no-op
 	if !s.persistent {
-		s.log.Debug("start: transient, not booting worker")
 		return nil
 	}
-
-	s.log.Debug("start: persistent, booting worker")
 
 	// otherwise, boot the persistent worker
 	if _, err := s.acquireWorker(ctx); err != nil {
@@ -130,10 +133,9 @@ func (s *WorkerSupervisor) Start(ctx context.Context) error {
 
 func (s *WorkerSupervisor) Send(
 	ctx context.Context,
-	result any,
 	method string,
 	data map[string]any,
-) (ReleaseFunc, error) {
+) (*Result, error) {
 	// acquire send lock. should not be necessary as supervisors
 	// are managed by a resource pool, but it does no harm to make
 	// the supervisor thread-safe and serialize access.
@@ -145,9 +147,9 @@ func (s *WorkerSupervisor) Send(
 		return nil, fmt.Errorf("failed to acquire worker: %w", err)
 	}
 
-	// NOTICE: unconventional error handling, as we need to release
-	// the worker before returning the error.
-	err = worker.Send(ctx, result, method, data, s.sendParams.Timeout)
+	// NOTICE: unconventional error handling ahead, as we need
+	//         to release the worker before returning the error.
+	resData, err := worker.Send(ctx, method, data, s.sendParams.Timeout)
 
 	release, releaseErr := s.releaseWorker()
 	if releaseErr != nil {
@@ -157,7 +159,10 @@ func (s *WorkerSupervisor) Send(
 		}
 	}
 
-	return release, err
+	return &Result{
+		Data:    resData,
+		Release: release,
+	}, err
 }
 
 func (s *WorkerSupervisor) Suspend(
@@ -212,11 +217,10 @@ func (s *WorkerSupervisor) releaseWorker() (ReleaseFunc, error) {
 	// if the worker is persistent, this is a no-op, as we
 	// want to keep the worker alive for future messages
 	if s.persistent {
-		s.log.Debug("persistent worker, not releasing")
 		return noopReleaseFunc, nil
 	}
 
-	s.log.Debug("releasing transient worker")
+	s.log.Debug("transient: releasing worker")
 
 	return s.terminateWorker()
 }
@@ -239,21 +243,23 @@ func (s *WorkerSupervisor) terminateWorker() (ReleaseFunc, error) {
 	return s.worker.Stop(s.stopParams)
 }
 
-func (s *WorkerSupervisor) bootWorker(
-	ctx context.Context,
-) (Adapter, error) {
-	worker, err := s.createAdapter()
+func (s *WorkerSupervisor) bootWorker(ctx context.Context) (Adapter, error) {
+	adapter, err := s.createAdapter()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create worker: %w", err)
 	}
 
-	if err = worker.Start(ctx, s.startParams); err != nil {
+	if err = adapter.Start(ctx, s.startParams); err != nil {
 		return nil, fmt.Errorf("failed to start worker: %w", err)
 	}
 
-	return worker, nil
+	return adapter, nil
 }
 
-func defaultWorkerFactory(ctx context.Context, config worker.StartConfig, log *zap.Logger) (worker.Worker, error) {
+func defaultWorkerFactory(
+	ctx context.Context,
+	config worker.StartConfig,
+	log *zap.Logger,
+) (worker.Worker, error) {
 	return worker.NewProcessWorker(ctx, config, log), nil
 }
