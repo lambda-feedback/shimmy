@@ -107,6 +107,12 @@ functions on arbitrary, serverless platforms.`
 				EnvVars:  []string{"FUNCTION_RPC_TRANSPORT_WS_URL"},
 				Category: "rpc",
 			},
+			&cli.StringFlag{
+				Name:     "rpc-transport-tcp-address",
+				Usage:    "the address to use for the TCP transport. Default: localhost:7321",
+				EnvVars:  []string{"FUNCTION_RPC_TRANSPORT_TCP_ADDRESS"},
+				Category: "rpc",
+			},
 		},
 		Before: func(ctx *cli.Context) error {
 			// create the logger
@@ -227,6 +233,7 @@ func parseRootConfig(ctx *cli.Context) (config.Config, error) {
 		"rpc-transport-ipc-endpoint": "runtime.io.rpc.ipc.endpoint",
 		"rpc-transport-http-url":     "runtime.io.rpc.http.url",
 		"rpc-transport-ws-url":       "runtime.io.rpc.ws.url",
+		"rpc-transport-tcp-address":  "runtime.io.rpc.tcp.address",
 	}
 
 	// parse config using env

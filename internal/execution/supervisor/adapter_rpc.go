@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"runtime"
 	"time"
 
@@ -45,12 +46,21 @@ type RpcConfig struct {
 
 	// WsTransport is the configuration for the websocket transport.
 	Ws WsTransportConfig `conf:"ws"`
+
+	// TcpTransport is the configuration for the tcp transport.
+	Tcp TcpTransportConfig `config:"tcp"`
 }
 
 // HttpTransportConfig describes the configuration for http transport.
 type HttpTransportConfig struct {
 	// Url is the url to send http requests to.
 	Url string `conf:"url"`
+}
+
+// TcpTransportConfig describes the configuration for tcp transport.
+type TcpTransportConfig struct {
+	// Address is the address to send tcp requests to.
+	Address string `conf:"address"`
 }
 
 // IpcTransportConfig describes the configuration for unix socket transport.
@@ -223,15 +233,21 @@ func (a *rpcAdapter) dialRpc(
 		}
 
 		return rpc.DialIO(ctx, a.stdioPipe, a.stdioPipe)
+
 	case IpcTransport:
 		return rpc.DialIPC(ctx, getIPCEndpoint(config.Ipc))
+
 	case HttpTransport:
 		// TODO: use custom client
 		return rpc.DialHTTP(config.Http.Url)
+
 	case WsTransport:
 		// TODO: use custom dialer
 		// TODO: do we need to set custom origin?
 		return rpc.DialWebsocket(ctx, config.Ws.Url, "")
+
+	case TcpTransport:
+		return dialTCP(ctx, config.Tcp.Address)
 	}
 
 	return nil, ErrUnsupportedIOTransport
@@ -266,7 +282,22 @@ func buildEnv(env []string, config RpcConfig) []string {
 		env = append(env, "EVAL_RPC_HTTP_URL="+config.Http.Url)
 	case WsTransport:
 		env = append(env, "EVAL_RPC_WS_URL="+config.Ws.Url)
+	case TcpTransport:
+		env = append(env, "EVAL_RPC_TCP_ADDRESS="+config.Tcp.Address)
 	}
 
 	return env
+}
+
+func dialTCP(ctx context.Context, address string) (*rpc.Client, error) {
+	conn, err := newTCPConnection(ctx, address)
+	if err != nil {
+		return nil, err
+	}
+
+	return rpc.DialIO(ctx, conn, conn)
+}
+
+func newTCPConnection(ctx context.Context, endpoint string) (net.Conn, error) {
+	return new(net.Dialer).DialContext(ctx, "tcp", endpoint)
 }
