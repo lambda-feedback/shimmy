@@ -204,7 +204,7 @@ func (a *rpcAdapter) dialRpcWithRetry(
 			zap.Int("retry", i),
 			zap.Duration("backoff", backoffDelay),
 			zap.Error(err),
-		).Debug("error dialing rpc")
+		).Debug("error dialing")
 
 		// Wait for the backoff delay or until the context is done
 		select {
@@ -226,27 +226,43 @@ func (a *rpcAdapter) dialRpc(
 		return nil, errors.New("worker not available")
 	}
 
+	log := a.log.With(
+		zap.String("transport", string(config.Transport)),
+	)
+
 	switch config.Transport {
 	case StdioTransport:
 		if a.stdioPipe == nil {
 			return nil, errors.New("stdio pipe not available")
 		}
 
+		log.Debug("dialing")
+
 		return rpc.DialIO(ctx, a.stdioPipe, a.stdioPipe)
 
 	case IpcTransport:
-		return rpc.DialIPC(ctx, getIPCEndpoint(config.Ipc))
+		endpoint := getIPCEndpoint(config.Ipc)
+
+		log.Debug("dialing", zap.String("endpoint", endpoint))
+
+		return rpc.DialIPC(ctx, endpoint)
 
 	case HttpTransport:
+		log.Debug("dialing", zap.String("url", config.Http.Url))
+
 		// TODO: use custom client
 		return rpc.DialHTTP(config.Http.Url)
 
 	case WsTransport:
+		log.Debug("dialing", zap.String("url", config.Ws.Url))
+
 		// TODO: use custom dialer
 		// TODO: do we need to set custom origin?
 		return rpc.DialWebsocket(ctx, config.Ws.Url, "")
 
 	case TcpTransport:
+		log.Debug("dialing", zap.String("address", config.Tcp.Address))
+
 		return dialTCP(ctx, config.Tcp.Address)
 	}
 

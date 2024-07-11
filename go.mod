@@ -51,6 +51,7 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/xeipuuv/gojsonschema v1.2.0
 	github.com/xrash/smetrics v0.0.0-20201216005158-039620a65673 // indirect
+	github.com/zeromq/goczmq v4.1.0+incompatible
 	go.uber.org/dig v1.17.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/sync v0.7.0 // indirect
