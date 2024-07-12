@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -202,7 +201,6 @@ func (w *ProcessWorker) Start(ctx context.Context) error {
 		// read from stderr and save it for later use
 		// TODO: use some prefix / suffix reader as stderr could get big big
 		_, err := io.Copy(&w.stderr, stderrPipe)
-		fmt.Printf("%v\n", reflect.TypeOf(err))
 		if errors.Is(err, io.EOF) {
 			w.log.Debug("stderr EOF")
 			return
