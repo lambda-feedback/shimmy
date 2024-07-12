@@ -82,6 +82,20 @@ functions on arbitrary, serverless platforms.`
 				Category:    "function",
 				EnvVars:     []string{"FUNCTION_MAX_PROCS"},
 			},
+			&cli.DurationFlag{
+				Name:     "worker-stop-timeout",
+				Usage:    "the duration to wait for a worker process to stop.",
+				Value:    5 * time.Second,
+				Category: "worker",
+				EnvVars:  []string{"FUNCTION_WORKER_STOP_TIMEOUT"},
+			},
+			&cli.DurationFlag{
+				Name:     "worker-send-timeout",
+				Usage:    "the timeout for a single message send operation.",
+				Value:    30 * time.Second,
+				Category: "worker",
+				EnvVars:  []string{"FUNCTION_WORKER_SEND_TIMEOUT"},
+			},
 			&cli.StringFlag{
 				Name:     "rpc-transport",
 				Usage:    "the transport to use for the RPC interface. Options: stdio, ipc, http, tcp, ws.",
@@ -237,6 +251,8 @@ func parseRootConfig(ctx *cli.Context) (config.Config, error) {
 		"rpc-transport-http-url":     "runtime.io.rpc.http.url",
 		"rpc-transport-ws-url":       "runtime.io.rpc.ws.url",
 		"rpc-transport-tcp-address":  "runtime.io.rpc.tcp.address",
+		"worker-send-timeout":        "runtime.send.timeout",
+		"worker-stop-timeout":        "runtime.stop.timeout",
 	}
 
 	// parse config using env

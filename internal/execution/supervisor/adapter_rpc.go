@@ -115,7 +115,7 @@ func (a *rpcAdapter) Start(
 	params.Env = buildEnv(params.Env, a.config)
 
 	// create the worker
-	worker, err := a.workerFactory(ctx, params)
+	worker, err := a.workerFactory(params)
 	if err != nil {
 		return fmt.Errorf("error creating worker: %w", err)
 	}
@@ -144,8 +144,8 @@ func (a *rpcAdapter) Start(
 	// dial the rpc client
 	return a.dialRpcWithRetry(
 		ctx,
-		100*time.Millisecond,
-		10*time.Second,
+		100*time.Millisecond, // initial delay
+		10*time.Second,       // max delay
 	)
 }
 
@@ -165,6 +165,9 @@ func (a *rpcAdapter) Send(
 
 	var result map[string]any
 
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	if err := a.rpcClient.CallContext(ctx, &result, method, data); err != nil {
 		return nil, fmt.Errorf("error sending rpc request: %w", err)
 	}
@@ -172,14 +175,12 @@ func (a *rpcAdapter) Send(
 	return map[string]any{"result": result, "command": method}, nil
 }
 
-func (a *rpcAdapter) Stop(
-	params worker.StopConfig,
-) (ReleaseFunc, error) {
+func (a *rpcAdapter) Stop() (ReleaseFunc, error) {
 	if a.worker == nil {
 		return nil, errors.New("no worker provided")
 	}
 
-	return stopWorker(a.worker, params)
+	return stopWorker(a.worker)
 }
 
 func (a *rpcAdapter) dialRpcWithRetry(

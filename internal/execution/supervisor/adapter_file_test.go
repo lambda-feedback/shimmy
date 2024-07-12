@@ -25,7 +25,7 @@ func TestFileAdapter_Start_DoesNotStartWorker(t *testing.T) {
 func TestFileAdapter_Stop_DoesNotStopWorker(t *testing.T) {
 	a, w := createFileAdapter(t)
 
-	_, err := a.Stop(worker.StopConfig{})
+	_, err := a.Stop()
 	assert.NoError(t, err)
 
 	w.AssertNotCalled(t, "Terminate")
@@ -36,7 +36,7 @@ func TestFileAdapter_Send(t *testing.T) {
 
 	var sp *worker.StartConfig
 
-	workerFactory := func(ctx context.Context, params worker.StartConfig) (worker.Worker, error) {
+	workerFactory := func(params worker.StartConfig) (worker.Worker, error) {
 		sp = &params
 		return w, nil
 	}
@@ -134,7 +134,7 @@ func TestFileAdapter_Send_ReturnsInvalidDataError(t *testing.T) {
 func createFileAdapter(t *testing.T) (*fileAdapter, *worker.MockWorker) {
 	w := worker.NewMockWorker(t)
 
-	workerFactory := func(ctx context.Context, params worker.StartConfig) (worker.Worker, error) {
+	workerFactory := func(params worker.StartConfig) (worker.Worker, error) {
 		return w, nil
 	}
 
