@@ -308,6 +308,7 @@ func createSupervisorWithFactory(
 		Config: supervisor.Config{
 			IO: supervisor.IOConfig{Interface: mode},
 		},
+		Context:        context.Background(),
 		AdapterFactory: factory,
 		Log:            zap.NewNop(),
 	})
