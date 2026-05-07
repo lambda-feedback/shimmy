@@ -7,7 +7,6 @@ func Module() fx.Option {
 		fx.Provide(NewCommandHandler),
 		fx.Provide(NewMuEdHandler),
 		fx.Provide(NewLegacyRoute),
-		fx.Provide(NewCommandRoute),
 		fx.Provide(NewHealthRoute),
 		fx.Provide(NewMuEdEvaluateRoute),
 		fx.Provide(NewMuEdHealthRoute),
