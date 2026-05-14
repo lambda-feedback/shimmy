@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
@@ -18,6 +19,7 @@ type HttpServerParams struct {
 	Context context.Context
 
 	Config HttpConfig
+	Spec   *openapi3.T
 
 	Handlers []*HttpHandler `group:"handlers"`
 	Logger   *zap.Logger
@@ -39,8 +41,9 @@ func NewHttpServer(params HttpServerParams) *HttpServer {
 	}
 
 	var handler http.Handler = NormalizePath(mux)
+	handler = OpenAPIMiddleware(params.Spec, params.Logger)(handler)
 	if params.Config.H2c {
-		handler = h2c.NewHandler(NormalizePath(mux), &http2.Server{})
+		handler = h2c.NewHandler(handler, &http2.Server{})
 	}
 
 	server := &http.Server{
