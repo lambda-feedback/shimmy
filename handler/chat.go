@@ -15,6 +15,11 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	version, ok := h.checkMuEdVersion(w, r)
+	if !ok {
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -60,6 +65,7 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(muEdVersionHeader, version)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(chatResp) //nolint:errcheck
 }
@@ -67,6 +73,11 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 // ServeChatHealth handles GET /chat/health.
 func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 	if !h.checkAuth(w, r) {
+		return
+	}
+
+	version, ok := h.checkMuEdVersion(w, r)
+	if !ok {
 		return
 	}
 
@@ -93,6 +104,7 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 	healthResp := runtime.MuEdToChatHealthResponse(resultMap)
 
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(muEdVersionHeader, version)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(healthResp) //nolint:errcheck
 }

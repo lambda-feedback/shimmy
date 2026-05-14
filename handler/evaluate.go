@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/lambda-feedback/shimmy/internal/server"
 	"github.com/lambda-feedback/shimmy/runtime"
 )
+
+const muEdVersionHeader = "X-Api-Version"
 
 type MuEdHandlerParams struct {
 	fx.In
@@ -36,6 +39,32 @@ func NewMuEdHandler(params MuEdHandlerParams) *MuEdHandler {
 		config:  params.Config,
 		log:     params.Log,
 	}
+}
+
+// checkMuEdVersion validates the X-Api-Version request header.
+// Returns (resolvedVersion, true) on success, or writes a 406 and returns ("", false).
+func (h *MuEdHandler) checkMuEdVersion(w http.ResponseWriter, r *http.Request) (string, bool) {
+	requested := r.Header.Get(muEdVersionHeader)
+	if requested != "" && !runtime.MuEdIsVersionSupported(requested) {
+		body, _ := json.Marshal(map[string]any{
+			"title": "API version not supported",
+			"message": fmt.Sprintf(
+				"The requested API version '%s' is not supported. Supported versions are: %v.",
+				requested, runtime.SupportedMuEdVersions,
+			),
+			"code": "VERSION_NOT_SUPPORTED",
+			"details": map[string]any{
+				"requestedVersion":  requested,
+				"supportedVersions": runtime.SupportedMuEdVersions,
+			},
+		})
+		w.Header().Set(muEdVersionHeader, runtime.MuEdResolveVersion(requested))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotAcceptable)
+		w.Write(body) //nolint:errcheck
+		return "", false
+	}
+	return runtime.MuEdResolveVersion(requested), true
 }
 
 func (h *MuEdHandler) checkAuth(w http.ResponseWriter, r *http.Request) bool {

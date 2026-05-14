@@ -59,6 +59,7 @@ func TestServeChat_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, res.StatusCode)
 	assert.Equal(t, "application/json", res.Header.Get("Content-Type"))
+	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
 
 	var chatResp map[string]any
 	require.NoError(t, json.Unmarshal(body, &chatResp))
@@ -159,6 +160,7 @@ func TestServeChatHealth_Success(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, res.StatusCode)
 	assert.Equal(t, "application/json", res.Header.Get("Content-Type"))
+	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
 
 	var result map[string]any
 	require.NoError(t, json.Unmarshal(raw, &result))
@@ -198,4 +200,115 @@ func TestServeChatHealth_RuntimeError(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Result().StatusCode)
 	mockRuntime.AssertExpectations(t)
+}
+
+// --- Version header tests (ServeChat) ---
+
+func TestServeChat_AbsentVersionHeader(t *testing.T) {
+	mockRuntime := new(MockRuntime)
+	mockRuntime.On("Handle", mock.Anything, mock.Anything).
+		Return(chatRuntimeResponse("ASSISTANT", "hi"), nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(chatRequestBody(t)))
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(nil, mockRuntime, "").ServeChat(w, req)
+
+	res := w.Result()
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+}
+
+func TestServeChat_SupportedVersionHeader(t *testing.T) {
+	mockRuntime := new(MockRuntime)
+	mockRuntime.On("Handle", mock.Anything, mock.Anything).
+		Return(chatRuntimeResponse("ASSISTANT", "hi"), nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(chatRequestBody(t)))
+	req.Header.Set("X-Api-Version", "0.1.0")
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(nil, mockRuntime, "").ServeChat(w, req)
+
+	res := w.Result()
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+}
+
+func TestServeChat_UnsupportedVersionHeader(t *testing.T) {
+	mockRuntime := new(MockRuntime)
+
+	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(chatRequestBody(t)))
+	req.Header.Set("X-Api-Version", "99.0.0")
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(nil, mockRuntime, "").ServeChat(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+
+	assert.Equal(t, http.StatusNotAcceptable, res.StatusCode)
+	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(raw, &body))
+	assert.Equal(t, "VERSION_NOT_SUPPORTED", body["code"])
+	details, ok := body["details"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "99.0.0", details["requestedVersion"])
+
+	mockRuntime.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)
+}
+
+// --- Version header tests (ServeChatHealth) ---
+
+func TestServeChatHealth_AbsentVersionHeader(t *testing.T) {
+	mockRuntime := new(MockRuntime)
+	mockRuntime.On("Handle", mock.Anything, runtime.EvaluationRequest{
+		Command: runtime.CommandChatHealth,
+		Data:    map[string]any{},
+	}).Return(runtime.EvaluationResponse{
+		"command": "chat/health",
+		"result": map[string]any{
+			"status":               "OK",
+			"capabilities":         map[string]any{"chat": true},
+			"supportedLanguages":   []any{},
+			"supportedModels":      []any{},
+			"supportedAPIVersions": []any{},
+		},
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/chat/health", nil)
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(nil, mockRuntime, "").ServeChatHealth(w, req)
+
+	res := w.Result()
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+	mockRuntime.AssertExpectations(t)
+}
+
+func TestServeChatHealth_UnsupportedVersionHeader(t *testing.T) {
+	mockRuntime := new(MockRuntime)
+
+	req := httptest.NewRequest(http.MethodGet, "/chat/health", nil)
+	req.Header.Set("X-Api-Version", "99.0.0")
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(nil, mockRuntime, "").ServeChatHealth(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+
+	assert.Equal(t, http.StatusNotAcceptable, res.StatusCode)
+	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(raw, &body))
+	assert.Equal(t, "VERSION_NOT_SUPPORTED", body["code"])
+
+	mockRuntime.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)
 }
