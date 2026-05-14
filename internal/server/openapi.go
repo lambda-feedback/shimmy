@@ -56,7 +56,9 @@ func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) func(http.Handler) htt
 				Options:                opts,
 			}
 			if err := openapi3filter.ValidateResponse(r.Context(), respInput); err != nil {
-				log.Warn("response failed OpenAPI validation", zap.Error(err))
+				log.Error("response failed OpenAPI validation", zap.Error(err))
+				http.Error(w, "invalid response format", http.StatusInternalServerError)
+				return
 			}
 
 			// Forward captured response
