@@ -71,8 +71,8 @@ func muEdExtractParams(req MuEdEvaluateRequest) map[string]any {
 	return map[string]any{}
 }
 
-// MuEdBuildLegacyEvalRequest builds {response, answer, params} for the eval command.
-func MuEdBuildLegacyEvalRequest(req MuEdEvaluateRequest) (map[string]any, error) {
+// MuEdBuildLegacyEvaluateRequest builds {response, answer, params} for the evaluate command.
+func MuEdBuildLegacyEvaluateRequest(req MuEdEvaluateRequest) (map[string]any, error) {
 	response, err := muEdExtractContent(req.Submission.Content, req.Submission.Type)
 	if err != nil {
 		return nil, fmt.Errorf("submission: %w", err)
@@ -108,9 +108,9 @@ func MuEdBuildLegacyPreviewRequest(req MuEdEvaluateRequest) (map[string]any, err
 	}, nil
 }
 
-// MuEdToEvalFeedback transforms a legacy result map into a muEd Feedback array.
+// MuEdToEvaluateFeedback transforms a legacy result map into a muEd Feedback array.
 // responseLatex and responseSimplified are always present in the output (null when absent).
-func MuEdToEvalFeedback(result map[string]any) []map[string]any {
+func MuEdToEvaluateFeedback(result map[string]any) []map[string]any {
 	feedback := map[string]any{
 		"responseLatex":      nil,
 		"responseSimplified": nil,
