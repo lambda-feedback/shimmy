@@ -16,6 +16,12 @@ const (
 
 	// CommandHealth is the command for healthcheck
 	CommandHealth = "healthcheck"
+
+	// CommandChat is the command for chat.
+	CommandChat Command = "chat"
+
+	// CommandChatHealth is the command for the chat health check.
+	CommandChatHealth Command = "chat/health"
 )
 
 // ParseCommand parses a command from a given path.

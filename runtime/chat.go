@@ -1,5 +1,10 @@
 package runtime
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 type MuEdChatRole string
 
 const (
@@ -82,4 +87,60 @@ type MuEdChatHealthResponse struct {
 	SupportedLanguages   []string             `json:"supportedLanguages"`
 	SupportedModels      []string             `json:"supportedModels"`
 	SupportedAPIVersions []string             `json:"supportedAPIVersions"`
+}
+
+// MuEdBuildChatRequest converts a MuEdChatRequest to the map sent to the worker.
+func MuEdBuildChatRequest(req MuEdChatRequest) (map[string]any, error) {
+	if len(req.Messages) == 0 {
+		return nil, fmt.Errorf("messages must not be empty")
+	}
+	b, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal chat request: %w", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("failed to build chat request: %w", err)
+	}
+	return m, nil
+}
+
+// MuEdToChatResponse transforms a worker result map into a MuEdChatResponse.
+func MuEdToChatResponse(result map[string]any) (*MuEdChatResponse, error) {
+	b, err := json.Marshal(result)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal chat result: %w", err)
+	}
+	var resp MuEdChatResponse
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal chat response: %w", err)
+	}
+	if resp.Output.Role == "" {
+		return nil, fmt.Errorf("chat response missing output role")
+	}
+	if resp.Output.Content == "" {
+		return nil, fmt.Errorf("chat response missing output content")
+	}
+	return &resp, nil
+}
+
+// MuEdToChatHealthResponse transforms a worker result map into a MuEdChatHealthResponse.
+// nil slices are normalised to empty slices so they serialise as [] not null.
+func MuEdToChatHealthResponse(result map[string]any) MuEdChatHealthResponse {
+	b, _ := json.Marshal(result)
+	var resp MuEdChatHealthResponse
+	json.Unmarshal(b, &resp) //nolint:errcheck
+	if resp.Status == "" {
+		resp.Status = MuEdChatHealthStatusOK
+	}
+	if resp.SupportedLanguages == nil {
+		resp.SupportedLanguages = []string{}
+	}
+	if resp.SupportedModels == nil {
+		resp.SupportedModels = []string{}
+	}
+	if resp.SupportedAPIVersions == nil {
+		resp.SupportedAPIVersions = []string{}
+	}
+	return resp
 }
