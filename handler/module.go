@@ -9,6 +9,6 @@ func Module() fx.Option {
 		fx.Provide(NewLegacyRoute),
 		fx.Provide(NewHealthRoute),
 		fx.Provide(NewMuEdEvaluateRoute),
-		fx.Provide(NewMuEdHealthRoute),
+		fx.Provide(NewMuEdEvaluateHealthRoute),
 	)
 }
