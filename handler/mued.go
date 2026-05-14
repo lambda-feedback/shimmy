@@ -140,6 +140,34 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(feedback) //nolint:errcheck
 }
 
+// ServeChat handles POST /chat.
+func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
+	if !h.checkAuth(w, r) {
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	http.Error(w, "not implemented", http.StatusNotImplemented)
+}
+
+// ServeChatHealth handles GET /chat/health.
+func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
+	if !h.checkAuth(w, r) {
+		return
+	}
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	http.Error(w, "not implemented", http.StatusNotImplemented)
+}
+
 // ServeHealth handles GET /evaluate/health.
 func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 	if !h.checkAuth(w, r) {

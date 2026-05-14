@@ -21,3 +21,11 @@ func NewMuEdEvaluateRoute(handler *MuEdHandler) server.HttpHandlerResult {
 func NewMuEdEvaluateHealthRoute(handler *MuEdHandler) server.HttpHandlerResult {
 	return server.AsHttpHandler("/evaluate/health", http.HandlerFunc(handler.ServeHealth))
 }
+
+func NewMuEdChatRoute(handler *MuEdHandler) server.HttpHandlerResult {
+	return server.AsHttpHandler("/chat", http.HandlerFunc(handler.ServeChat))
+}
+
+func NewMuEdChatHealthRoute(handler *MuEdHandler) server.HttpHandlerResult {
+	return server.AsHttpHandler("/chat/health", http.HandlerFunc(handler.ServeChatHealth))
+}
