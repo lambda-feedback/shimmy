@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/config"
+	"github.com/lambda-feedback/shimmy/internal/server"
 	"github.com/lambda-feedback/shimmy/runtime"
 )
 
@@ -140,34 +141,6 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(feedback) //nolint:errcheck
 }
 
-// ServeChat handles POST /chat.
-func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
-	if !h.checkAuth(w, r) {
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	http.Error(w, "not implemented", http.StatusNotImplemented)
-}
-
-// ServeChatHealth handles GET /chat/health.
-func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
-	if !h.checkAuth(w, r) {
-		return
-	}
-
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	http.Error(w, "not implemented", http.StatusNotImplemented)
-}
-
 // ServeHealth handles GET /evaluate/health.
 func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 	if !h.checkAuth(w, r) {
@@ -197,4 +170,12 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(result) //nolint:errcheck
+}
+
+func NewMuEdEvaluateRoute(handler *MuEdHandler) server.HttpHandlerResult {
+	return server.AsHttpHandler("/evaluate", http.HandlerFunc(handler.ServeEvaluate))
+}
+
+func NewMuEdEvaluateHealthRoute(handler *MuEdHandler) server.HttpHandlerResult {
+	return server.AsHttpHandler("/evaluate/health", http.HandlerFunc(handler.ServeHealth))
 }
