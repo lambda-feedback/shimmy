@@ -109,7 +109,7 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	if isPreview {
 		legacyBody, err = runtime.MuEdBuildLegacyPreviewRequest(muEdReq)
 	} else {
-		legacyBody, err = runtime.MuEdBuildLegacyEvalRequest(muEdReq)
+		legacyBody, err = runtime.MuEdBuildLegacyEvaluateRequest(muEdReq)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -166,7 +166,7 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	if isPreview {
 		feedback = runtime.MuEdToPreviewFeedback(result)
 	} else {
-		feedback = runtime.MuEdToEvalFeedback(result)
+		feedback = runtime.MuEdToEvaluateFeedback(result)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
