@@ -38,7 +38,7 @@ func TestMuEdContentKey(t *testing.T) {
 					},
 				},
 			}
-			body, err := runtime.MuEdBuildLegacyEvalRequest(req)
+			body, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
 			require.NoError(t, err)
 			assert.Equal(t, "x", body["response"])
 		})
@@ -59,7 +59,7 @@ func TestMuEdBuildLegacyEvalRequest(t *testing.T) {
 				},
 			},
 		}
-		body, err := runtime.MuEdBuildLegacyEvalRequest(req)
+		body, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
 		require.NoError(t, err)
 		assert.Equal(t, "x^2", body["response"])
 		assert.Equal(t, "x^2", body["answer"])
@@ -79,7 +79,7 @@ func TestMuEdBuildLegacyEvalRequest(t *testing.T) {
 				},
 			},
 		}
-		body, err := runtime.MuEdBuildLegacyEvalRequest(req)
+		body, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
 		require.NoError(t, err)
 		assert.Equal(t, "hello", body["response"])
 		assert.Equal(t, "hello", body["answer"])
@@ -98,7 +98,7 @@ func TestMuEdBuildLegacyEvalRequest(t *testing.T) {
 				},
 			},
 		}
-		body, err := runtime.MuEdBuildLegacyEvalRequest(req)
+		body, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
 		require.NoError(t, err)
 		assert.Equal(t, "foo", body["response"])
 		assert.Equal(t, "bar", body["answer"])
@@ -117,7 +117,7 @@ func TestMuEdBuildLegacyEvalRequest(t *testing.T) {
 				},
 			},
 		}
-		body, err := runtime.MuEdBuildLegacyEvalRequest(req)
+		body, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
 		require.NoError(t, err)
 		assert.Equal(t, "x^2", body["response"])
 		assert.Equal(t, "x^2", body["answer"])
@@ -136,7 +136,7 @@ func TestMuEdBuildLegacyEvalRequest(t *testing.T) {
 				},
 			},
 		}
-		_, err := runtime.MuEdBuildLegacyEvalRequest(req)
+		_, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
 		require.Error(t, err)
 	})
 
@@ -148,7 +148,7 @@ func TestMuEdBuildLegacyEvalRequest(t *testing.T) {
 			},
 			Task: nil,
 		}
-		_, err := runtime.MuEdBuildLegacyEvalRequest(req)
+		_, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
 		require.Error(t, err)
 	})
 
@@ -160,7 +160,7 @@ func TestMuEdBuildLegacyEvalRequest(t *testing.T) {
 			},
 			Task: &runtime.MuEdTask{ReferenceSolution: nil},
 		}
-		_, err := runtime.MuEdBuildLegacyEvalRequest(req)
+		_, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
 		require.Error(t, err)
 	})
 
@@ -180,7 +180,7 @@ func TestMuEdBuildLegacyEvalRequest(t *testing.T) {
 				Params: map[string]any{"strict": true},
 			},
 		}
-		body, err := runtime.MuEdBuildLegacyEvalRequest(req)
+		body, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
 		require.NoError(t, err)
 		assert.Equal(t, map[string]any{"strict": true}, body["params"])
 	})
@@ -233,7 +233,7 @@ func TestMuEdBuildLegacyPreviewRequest(t *testing.T) {
 func TestMuEdToEvalFeedback(t *testing.T) {
 	t.Run("is_correct true gives awardedPoints 1", func(t *testing.T) {
 		result := map[string]any{"is_correct": true, "feedback": "Well done"}
-		fb := runtime.MuEdToEvalFeedback(result)
+		fb := runtime.MuEdToEvaluateFeedback(result)
 		require.Len(t, fb, 1)
 		assert.Equal(t, 1.0, fb[0]["awardedPoints"])
 		assert.Equal(t, "Well done", fb[0]["message"])
@@ -241,26 +241,26 @@ func TestMuEdToEvalFeedback(t *testing.T) {
 
 	t.Run("is_correct false gives awardedPoints 0", func(t *testing.T) {
 		result := map[string]any{"is_correct": false, "feedback": "Try again"}
-		fb := runtime.MuEdToEvalFeedback(result)
+		fb := runtime.MuEdToEvaluateFeedback(result)
 		require.Len(t, fb, 1)
 		assert.Equal(t, 0.0, fb[0]["awardedPoints"])
 	})
 
 	t.Run("matched_case mapped to matchedCase int", func(t *testing.T) {
 		result := map[string]any{"is_correct": false, "matched_case": float64(2)}
-		fb := runtime.MuEdToEvalFeedback(result)
+		fb := runtime.MuEdToEvaluateFeedback(result)
 		assert.Equal(t, 2, fb[0]["matchedCase"])
 	})
 
 	t.Run("responseLatex present", func(t *testing.T) {
 		result := map[string]any{"is_correct": true, "response_latex": "x^{2}"}
-		fb := runtime.MuEdToEvalFeedback(result)
+		fb := runtime.MuEdToEvaluateFeedback(result)
 		assert.Equal(t, "x^{2}", fb[0]["responseLatex"])
 	})
 
 	t.Run("responseLatex absent is null in JSON", func(t *testing.T) {
 		result := map[string]any{"is_correct": true}
-		fb := runtime.MuEdToEvalFeedback(result)
+		fb := runtime.MuEdToEvaluateFeedback(result)
 		assert.Nil(t, fb[0]["responseLatex"])
 
 		raw, err := json.Marshal(fb)
@@ -270,13 +270,13 @@ func TestMuEdToEvalFeedback(t *testing.T) {
 
 	t.Run("responseSimplified present", func(t *testing.T) {
 		result := map[string]any{"is_correct": true, "response_simplified": "x^2"}
-		fb := runtime.MuEdToEvalFeedback(result)
+		fb := runtime.MuEdToEvaluateFeedback(result)
 		assert.Equal(t, "x^2", fb[0]["responseSimplified"])
 	})
 
 	t.Run("responseSimplified absent is null in JSON", func(t *testing.T) {
 		result := map[string]any{"is_correct": true}
-		fb := runtime.MuEdToEvalFeedback(result)
+		fb := runtime.MuEdToEvaluateFeedback(result)
 		assert.Nil(t, fb[0]["responseSimplified"])
 
 		raw, err := json.Marshal(fb)
@@ -286,7 +286,7 @@ func TestMuEdToEvalFeedback(t *testing.T) {
 
 	t.Run("tags mapped", func(t *testing.T) {
 		result := map[string]any{"is_correct": true, "tags": []any{"algebra", "calculus"}}
-		fb := runtime.MuEdToEvalFeedback(result)
+		fb := runtime.MuEdToEvaluateFeedback(result)
 		assert.Equal(t, []string{"algebra", "calculus"}, fb[0]["tags"])
 	})
 }

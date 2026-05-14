@@ -18,6 +18,6 @@ func NewMuEdEvaluateRoute(handler *MuEdHandler) server.HttpHandlerResult {
 	return server.AsHttpHandler("/evaluate", http.HandlerFunc(handler.ServeEvaluate))
 }
 
-func NewMuEdHealthRoute(handler *MuEdHandler) server.HttpHandlerResult {
+func NewMuEdEvaluateHealthRoute(handler *MuEdHandler) server.HttpHandlerResult {
 	return server.AsHttpHandler("/evaluate/health", http.HandlerFunc(handler.ServeHealth))
 }
