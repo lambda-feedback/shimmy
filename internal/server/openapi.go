@@ -10,12 +10,12 @@ import (
 	"github.com/getkin/kin-openapi/routers/legacy"
 	"go.uber.org/zap"
 
-	"github.com/lambda-feedback/shimmy/api"
+	"github.com/lambda-feedback/shimmy/runtime/schema"
 )
 
 func LoadOpenAPISpec() (*openapi3.T, error) {
 	loader := openapi3.NewLoader()
-	return loader.LoadFromData(api.OpenAPISpec)
+	return loader.LoadFromData(schema.OpenAPISpec)
 }
 
 func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) func(http.Handler) http.Handler {
