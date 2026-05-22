@@ -99,7 +99,15 @@ jobs:
         run: go mod download
 
       - name: Install nsjail
-        run: sudo apt-get update && sudo apt-get install -y nsjail
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf bison flex g++ git \
+            libprotobuf-dev libnl-route-3-dev \
+            libtool pkg-config protobuf-compiler
+          git clone --depth=1 https://github.com/google/nsjail.git /tmp/nsjail
+          make -C /tmp/nsjail -j$(nproc)
+          sudo install -m 0755 /tmp/nsjail/nsjail /usr/sbin/nsjail
 
       - name: Run sandbox integration tests
         run: go test -v -run 'TestSandboxedWorker' ./internal/execution/worker/...
