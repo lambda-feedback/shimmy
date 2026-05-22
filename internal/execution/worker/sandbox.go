@@ -52,8 +52,9 @@ func applySandbox(config StartConfig, cfg SandboxConfig) (StartConfig, error) {
 func buildNsjailArgs(config StartConfig, cfg SandboxConfig) []string {
 	var args []string
 
-	// One-shot mode: nsjail exits when its child exits.
-	args = append(args, "--mode", "o")
+	// Exec mode: run the command directly with inherited stdio.
+	// Use 'e' (execve), not 'o' (once/TCP) — we rely on stdio, not a network socket.
+	args = append(args, "--mode", "e")
 
 	// Suppress nsjail's own log output so it doesn't pollute worker stderr.
 	args = append(args, "--log", "/dev/null")
