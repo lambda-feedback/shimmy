@@ -105,8 +105,11 @@ func buildNsjailArgs(config StartConfig, cfg SandboxConfig) []string {
 	}
 
 	// Resource limits.
+	// Use --rlimit_cpu (kernel RLIMIT_CPU) rather than --time_limit (nsjail's
+	// wall-clock monitor), which requires cgroupv2 and silently does nothing
+	// when cgroups are unavailable (e.g. inside a container).
 	if cfg.CpuTimeLimit > 0 {
-		args = append(args, "--time_limit", strconv.Itoa(cfg.CpuTimeLimit))
+		args = append(args, "--rlimit_cpu", strconv.Itoa(cfg.CpuTimeLimit))
 	}
 	if cfg.MemoryLimit > 0 {
 		// rlimit_as is in MiB when passed to nsjail.
