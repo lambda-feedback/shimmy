@@ -70,7 +70,7 @@ func TestApplySandbox_ResourceLimits(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	assert.True(t, containsPair(out.Args, "--time_limit", "30"), "missing --time_limit 30")
+	assert.True(t, containsPair(out.Args, "--rlimit_cpu", "30"), "missing --rlimit_cpu 30")
 	assert.True(t, containsPair(out.Args, "--rlimit_as", "256"), "missing --rlimit_as 256")
 	assert.True(t, containsPair(out.Args, "--rlimit_nofile", "64"), "missing --rlimit_nofile 64")
 }
