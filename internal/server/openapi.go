@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,11 +16,23 @@ import (
 
 func LoadOpenAPISpec() (*openapi3.T, error) {
 	loader := openapi3.NewLoader()
-	return loader.LoadFromData(schema.OpenAPISpec)
+	loader.IsExternalRefsAllowed = true
+	spec, err := loader.LoadFromData(schema.OpenAPISpec)
+	if err != nil {
+		return nil, fmt.Errorf("loading OpenAPI spec: %w", err)
+	}
+	// Skip validation for OpenAPI 3.1.0 — the legacy router validates on NewRouter.
+	return spec, nil
 }
 
-func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) func(http.Handler) http.Handler {
-	router, _ := legacy.NewRouter(spec)
+func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) (func(http.Handler) http.Handler, error) {
+	router, err := legacy.NewRouter(spec,
+		openapi3.IsOpenAPI31OrLater(),
+		openapi3.AllowExtraSiblingFields("description", "summary"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("creating OpenAPI router: %w", err)
+	}
 	opts := &openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc}
 
 	return func(next http.Handler) http.Handler {
@@ -68,5 +81,5 @@ func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) func(http.Handler) htt
 			w.WriteHeader(rec.Code)
 			w.Write(rec.Body.Bytes()) //nolint:errcheck
 		})
-	}
+	}, nil
 }
