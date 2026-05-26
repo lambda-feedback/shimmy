@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,12 +61,15 @@ func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) (func(http.Handler) ht
 			rec := httptest.NewRecorder()
 			next.ServeHTTP(rec, r)
 
+			// Snapshot body before validation — ValidateResponse drains the buffer.
+			bodyBytes := rec.Body.Bytes()
+
 			// Validate response (lenient — log only)
 			respInput := &openapi3filter.ResponseValidationInput{
 				RequestValidationInput: reqInput,
 				Status:                 rec.Code,
 				Header:                 rec.Header(),
-				Body:                   io.NopCloser(rec.Body),
+				Body:                   io.NopCloser(bytes.NewReader(bodyBytes)),
 				Options:                opts,
 			}
 			if err := openapi3filter.ValidateResponse(r.Context(), respInput); err != nil {
@@ -79,7 +83,7 @@ func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) (func(http.Handler) ht
 				w.Header()[k] = v
 			}
 			w.WriteHeader(rec.Code)
-			w.Write(rec.Body.Bytes()) //nolint:errcheck
+			w.Write(bodyBytes) //nolint:errcheck
 		})
 	}, nil
 }
