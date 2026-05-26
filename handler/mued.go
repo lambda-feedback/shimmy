@@ -166,13 +166,18 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, ok := resp["result"]
+	result, ok := resp["result"].(map[string]any)
 	if !ok {
 		http.Error(w, "invalid health response", http.StatusInternalServerError)
 		return
 	}
 
+	status := "DEGRADED"
+	if testsPassed, _ := result["tests_passed"].(bool); testsPassed {
+		status = "OK"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(result) //nolint:errcheck
+	json.NewEncoder(w).Encode(map[string]any{"status": status}) //nolint:errcheck
 }
