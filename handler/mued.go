@@ -40,6 +40,12 @@ func NewMuEdHandler(params MuEdHandlerParams) *MuEdHandler {
 	}
 }
 
+func writeJSONError(w http.ResponseWriter, msg string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": msg}}) //nolint:errcheck
+}
+
 // checkMuEdVersion validates the X-Api-Version request header.
 // Returns (resolvedVersion, true) on success, or writes a 406 and returns ("", false).
 func (h *MuEdHandler) checkMuEdVersion(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -228,8 +234,10 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 		statusCode = http.StatusServiceUnavailable
 	}
 
+	result := runtime.MuEdToHealthResponse(legacyResult)
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(muEdVersionHeader, version)
-	w.WriteHeader(statusCode)
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(result) //nolint:errcheck
 }
