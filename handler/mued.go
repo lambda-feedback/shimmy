@@ -214,13 +214,8 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 
 	result := runtime.MuEdToHealthResponse(legacyResult)
 
-	status := "DEGRADED"
-	if testsPassed, _ := result["tests_passed"].(bool); testsPassed {
-		status = "OK"
-	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(muEdVersionHeader, version)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]any{"status": status}) //nolint:errcheck
+	json.NewEncoder(w).Encode(result) //nolint:errcheck
 }
