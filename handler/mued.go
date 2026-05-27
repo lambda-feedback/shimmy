@@ -234,10 +234,8 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 		statusCode = http.StatusServiceUnavailable
 	}
 
-	result := runtime.MuEdToHealthResponse(legacyResult)
-
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(muEdVersionHeader, version)
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(result) //nolint:errcheck
 }
