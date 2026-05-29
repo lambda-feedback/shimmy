@@ -43,16 +43,13 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.runtime.Handle(r.Context(), runtime.EvaluationRequest{
-		Command: runtime.CommandChat,
-		Data:    reqData,
-	})
+	resp, err := h.runtime.Chat(r.Context(), runtime.ChatRequest{Data: reqData})
 	if err != nil {
 		http.Error(w, "chat failed", http.StatusInternalServerError)
 		return
 	}
 
-	resultMap, ok := resp["result"].(map[string]any)
+	resultMap, ok := resp.Data["result"].(map[string]any)
 	if !ok {
 		http.Error(w, "invalid response from chat function", http.StatusInternalServerError)
 		return
@@ -86,16 +83,13 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.runtime.Handle(r.Context(), runtime.EvaluationRequest{
-		Command: runtime.CommandChatHealth,
-		Data:    map[string]any{},
-	})
+	resp, err := h.runtime.ChatHealth(r.Context())
 	if err != nil {
 		http.Error(w, "chat health check failed", http.StatusInternalServerError)
 		return
 	}
 
-	resultMap, ok := resp["result"].(map[string]any)
+	resultMap, ok := resp.Data["result"].(map[string]any)
 	if !ok {
 		http.Error(w, "invalid chat health response", http.StatusInternalServerError)
 		return
