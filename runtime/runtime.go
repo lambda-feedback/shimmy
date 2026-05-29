@@ -13,6 +13,9 @@ import (
 type Runtime interface {
 	Handle(context.Context, EvaluationRequest) (EvaluationResponse, error)
 
+	Chat(context.Context, ChatRequest) (ChatResponse, error)
+	ChatHealth(context.Context) (ChatResponse, error)
+
 	Start(context.Context) error
 
 	Shutdown(context.Context) error
@@ -94,6 +97,16 @@ func (r *EvaluationRuntime) Handle(
 	message EvaluationRequest,
 ) (EvaluationResponse, error) {
 	return r.dispatcher.Send(ctx, string(message.Command), message.Data)
+}
+
+func (r *EvaluationRuntime) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	data, err := r.dispatcher.Send(ctx, string(CommandChat), req.Data)
+	return ChatResponse{Data: data}, err
+}
+
+func (r *EvaluationRuntime) ChatHealth(ctx context.Context) (ChatResponse, error) {
+	data, err := r.dispatcher.Send(ctx, string(CommandChatHealth), map[string]any{})
+	return ChatResponse{Data: data}, err
 }
 
 func (r *EvaluationRuntime) Shutdown(ctx context.Context) error {

@@ -29,6 +29,16 @@ func (m *MockRuntime) Handle(ctx context.Context, req runtime.EvaluationRequest)
 	return args.Get(0).(runtime.EvaluationResponse), args.Error(1)
 }
 
+func (m *MockRuntime) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, error) {
+	args := m.Called(ctx, req)
+	return args.Get(0).(runtime.ChatResponse), args.Error(1)
+}
+
+func (m *MockRuntime) ChatHealth(ctx context.Context) (runtime.ChatResponse, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(runtime.ChatResponse), args.Error(1)
+}
+
 func (m *MockRuntime) Start(ctx context.Context) error {
 	return m.Called(ctx).Error(0)
 }
