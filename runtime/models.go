@@ -33,6 +33,10 @@ func ParseCommand(path string) (Command, bool) {
 		return CommandPreview, true
 	case "healthcheck":
 		return CommandHealth, true
+	case "chat":
+		return CommandChat, true
+	case "chat/health":
+		return CommandChatHealth, true
 	}
 
 	return "", false
