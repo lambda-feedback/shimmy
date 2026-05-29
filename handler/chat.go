@@ -27,37 +27,37 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "failed to read body", http.StatusBadRequest)
+		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", "failed to read body", nil)
 		return
 	}
 
 	var chatReq runtime.MuEdChatRequest
 	if err := json.Unmarshal(body, &chatReq); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", "invalid request body", nil)
 		return
 	}
 
 	reqData, err := runtime.MuEdBuildChatRequest(chatReq)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", err.Error(), nil)
 		return
 	}
 
 	resp, err := h.runtime.Chat(r.Context(), runtime.ChatRequest{Data: reqData})
 	if err != nil {
-		http.Error(w, "chat failed", http.StatusInternalServerError)
+		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "chat failed", nil)
 		return
 	}
 
 	resultMap, ok := resp.Data["result"].(map[string]any)
 	if !ok {
-		http.Error(w, "invalid response from chat function", http.StatusInternalServerError)
+		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "invalid response from chat function", nil)
 		return
 	}
 
 	chatResp, err := runtime.MuEdToChatResponse(resultMap)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", err.Error(), nil)
 		return
 	}
 
@@ -85,13 +85,13 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.runtime.ChatHealth(r.Context())
 	if err != nil {
-		http.Error(w, "chat health check failed", http.StatusInternalServerError)
+		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "chat health check failed", nil)
 		return
 	}
 
 	resultMap, ok := resp.Data["result"].(map[string]any)
 	if !ok {
-		http.Error(w, "invalid chat health response", http.StatusInternalServerError)
+		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "invalid chat health response", nil)
 		return
 	}
 
