@@ -5,6 +5,16 @@ import (
 	"fmt"
 )
 
+// ChatRequest is the dispatcher-level request for the chat command.
+type ChatRequest struct {
+	Data map[string]any
+}
+
+// ChatResponse is the dispatcher-level response for the chat command.
+type ChatResponse struct {
+	Data map[string]any
+}
+
 type MuEdChatRole string
 
 const (
