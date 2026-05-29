@@ -186,6 +186,25 @@ func TestServeChatHealth_MethodNotAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Result().StatusCode)
 }
 
+func TestServeChatHealth_Unavailable(t *testing.T) {
+	mockRuntime := new(MockRuntime)
+	mockRuntime.On("ChatHealth", mock.Anything).Return(runtime.ChatResponse{
+		Data: map[string]any{
+			"result": map[string]any{
+				"status": "UNAVAILABLE",
+			},
+		},
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/chat/health", nil)
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(nil, mockRuntime, "").ServeChatHealth(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Result().StatusCode)
+	mockRuntime.AssertExpectations(t)
+}
+
 func TestServeChatHealth_RuntimeError(t *testing.T) {
 	mockRuntime := new(MockRuntime)
 	mockRuntime.On("ChatHealth", mock.Anything).

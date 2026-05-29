@@ -97,9 +97,14 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 
 	healthResp := runtime.MuEdToChatHealthResponse(resultMap)
 
+	statusCode := http.StatusOK
+	if healthResp.Status == runtime.MuEdChatHealthStatusUnavailable {
+		statusCode = http.StatusServiceUnavailable
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(muEdVersionHeader, version)
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(healthResp) //nolint:errcheck
 }
 
