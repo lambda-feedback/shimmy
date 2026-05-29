@@ -33,7 +33,7 @@ type HttpServer struct {
 	log    *zap.Logger
 }
 
-func NewHttpServer(params HttpServerParams) *HttpServer {
+func NewHttpServer(params HttpServerParams) (*HttpServer, error) {
 	mux := http.NewServeMux()
 
 	for _, handler := range params.Handlers {
@@ -41,7 +41,11 @@ func NewHttpServer(params HttpServerParams) *HttpServer {
 	}
 
 	var handler http.Handler = NormalizePath(mux)
-	handler = OpenAPIMiddleware(params.Spec, params.Logger)(handler)
+	openAPIMiddleware, err := OpenAPIMiddleware(params.Spec, params.Logger)
+	if err != nil {
+		return nil, fmt.Errorf("initialising OpenAPI middleware: %w", err)
+	}
+	handler = openAPIMiddleware(handler)
 	if params.Config.H2c {
 		handler = h2c.NewHandler(handler, &http2.Server{})
 	}
@@ -57,11 +61,14 @@ func NewHttpServer(params HttpServerParams) *HttpServer {
 		port:   params.Config.Port,
 		server: server,
 		log:    params.Logger,
-	}
+	}, nil
 }
 
-func NewLifecycleServer(params HttpServerParams, lc fx.Lifecycle) *HttpServer {
-	server := NewHttpServer(params)
+func NewLifecycleServer(params HttpServerParams, lc fx.Lifecycle) (*HttpServer, error) {
+	server, err := NewHttpServer(params)
+	if err != nil {
+		return nil, err
+	}
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			go server.Serve(ctx)
@@ -71,7 +78,7 @@ func NewLifecycleServer(params HttpServerParams, lc fx.Lifecycle) *HttpServer {
 			return server.Shutdown(ctx)
 		},
 	})
-	return server
+	return server, nil
 }
 
 func (s *HttpServer) Serve(context.Context) error {
