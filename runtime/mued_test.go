@@ -271,8 +271,9 @@ func TestMuEdToEvalFeedback(t *testing.T) {
 }
 
 func TestMuEdToPreviewFeedback(t *testing.T) {
-	result := map[string]any{"preview": map[string]any{"latex": "x^2"}}
+	inner := map[string]any{"latex": "x^2"}
+	result := map[string]any{"preview": inner}
 	fb := runtime.MuEdToPreviewFeedback(result)
 	require.Len(t, fb, 1)
-	assert.Equal(t, result, fb[0]["preSubmissionFeedback"])
+	assert.Equal(t, inner, fb[0]["preSubmissionFeedback"])
 }

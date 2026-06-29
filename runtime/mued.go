@@ -192,7 +192,11 @@ func MuEdToEvaluateFeedback(result map[string]any) []map[string]any {
 }
 
 // MuEdToPreviewFeedback wraps a legacy preview result as [{"preSubmissionFeedback": result}].
+// Unwraps the nested "preview" key produced by legacy preview functions before wrapping.
 func MuEdToPreviewFeedback(result map[string]any) []map[string]any {
+	if inner, ok := result["preview"].(map[string]any); ok {
+		result = inner
+	}
 	return []map[string]any{
 		{"preSubmissionFeedback": result},
 	}
