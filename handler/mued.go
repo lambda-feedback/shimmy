@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -17,9 +19,30 @@ import (
 const muEdVersionHeader = "X-Api-Version"
 
 // muEdRequestIDHeader is the µEd spec's request-tracing header (see
-// https://mued.org/spec, X-Request-Id parameter). Progress events reuse it
-// as their correlation key, echoing back whatever the caller supplied.
+// https://mued.org/spec, X-Request-Id parameter). It's echoed back on every
+// response, generating one if the caller didn't supply it, and progress
+// events reuse the resolved value as their correlation key.
 const muEdRequestIDHeader = "X-Request-Id"
+
+// resolveRequestID returns the caller-supplied X-Request-Id, or generates
+// one if absent, so every request is traceable and correlatable even when
+// the caller doesn't participate in tracing itself.
+func resolveRequestID(r *http.Request) string {
+	if id := r.Header.Get(muEdRequestIDHeader); id != "" {
+		return id
+	}
+	return generateRequestID()
+}
+
+func generateRequestID() string {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand.Read on a real OS essentially never fails; fall back
+		// to a timestamp-based id rather than leaving the request untraceable.
+		return fmt.Sprintf("req-%08x", time.Now().UnixNano())
+	}
+	return fmt.Sprintf("req-%x", b)
+}
 
 type MuEdHandlerParams struct {
 	fx.In
@@ -106,6 +129,9 @@ func (h *MuEdHandler) checkAuth(w http.ResponseWriter, r *http.Request) bool {
 
 // ServeEvaluate handles POST /evaluate.
 func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
+	requestID := resolveRequestID(r)
+	w.Header().Set(muEdRequestIDHeader, requestID)
+
 	if !h.checkAuth(w, r) {
 		return
 	}
@@ -172,7 +198,7 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	reporter, err := h.progressFactory.NewReporter(callbackURL, r.Header.Get(muEdRequestIDHeader))
+	reporter, err := h.progressFactory.NewReporter(callbackURL, requestID)
 	if err != nil {
 		h.log.Warn("invalid callbackUrl, disabling progress reporting", zap.Error(err))
 	} else if reporter != nil {
@@ -261,6 +287,8 @@ func muEdErrorMessageFromBody(body []byte) string {
 
 // ServeHealth handles GET /evaluate/health.
 func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(muEdRequestIDHeader, resolveRequestID(r))
+
 	if !h.checkAuth(w, r) {
 		return
 	}

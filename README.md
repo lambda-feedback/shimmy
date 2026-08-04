@@ -58,7 +58,9 @@ GLOBAL OPTIONS:
 
    progress
 
-   --progress-callback-timeout value  the timeout for a single progress callback delivery. (default: 1s) [$PROGRESS_CALLBACK_TIMEOUT]
+   --progress-callback-timeout value          the timeout for a single progress callback delivery. (default: 1s) [$PROGRESS_CALLBACK_TIMEOUT]
+   --progress-allowed-hosts value [ --progress-allowed-hosts value ]  restrict progress callback URLs to these hosts. Entries may be an exact hostname or a "*.example.com" wildcard. Unset allows any host, subject to the private-network guard below. [$PROGRESS_ALLOWED_HOSTS]
+   --progress-allow-private-networks          allow progress callback delivery to loopback, link-local, and private IP addresses. Leave disabled unless the callback target is known to live on a trusted private network. (default: false) [$PROGRESS_ALLOW_PRIVATE_NETWORKS]
 
    function
 
@@ -188,6 +190,75 @@ Example request using cases:
   }
 }
 ```
+
+### Progress Events
+
+The shim also exposes a µEd-compatible endpoint at `POST /evaluate` (see the [µEd spec](https://mued.org/spec)), separate from the legacy `POST /` endpoint documented above. When a client calls `/evaluate` with a `callbackUrl` in the request body, the shim POSTs a small JSON event to that URL at each stage of processing — in addition to, not instead of, the normal synchronous HTTP response.
+
+This lets a caller show progress to the end user (e.g. "Evaluating your submission…") without polling, and without the shim needing to hold a connection open. It works identically whether the shim is deployed standalone or on AWS Lambda.
+
+To opt in, include `callbackUrl` in the request body and, optionally, an `X-Request-Id` header — both are part of the µEd spec's own request contract, not shim-specific additions. Every event echoes back the `X-Request-Id` value verbatim so the caller can correlate it with the original request.
+
+```json
+{
+  "submission": { "type": "TEXT", "content": { "text": "..." } },
+  "task": { "referenceSolution": { "text": "..." } },
+  "callbackUrl": "https://your-service.example.com/hooks/shimmy-progress"
+}
+```
+
+Four stages are emitted, in order, for a successful evaluation:
+
+| Stage | Meaning |
+|-------|---------|
+| `preparing` | The evaluation environment is being set up (a worker is ready — freshly booted or reused). |
+| `evaluating` | The evaluation function is being invoked. |
+| `completed` | Feedback has been computed. `data.feedback` carries the same array returned in the synchronous response body. |
+| `failed` | A terminal failure occurred at some stage. `message` is safe to show to an end user; `error` carries raw technical detail for logs only. |
+
+`completed` and `failed` are terminal — at most one of them is delivered per request, whichever occurs first.
+
+Example event body:
+
+```json
+{
+  "correlationId": "req-7c193f38",
+  "stage": "evaluating",
+  "command": "eval",
+  "message": "Evaluating your submission…",
+  "timestamp": "2026-08-04T14:23:01.512Z"
+}
+```
+
+Example terminal event, with the feedback payload attached:
+
+```json
+{
+  "correlationId": "req-7c193f38",
+  "stage": "completed",
+  "command": "eval",
+  "message": "Feedback is ready.",
+  "data": {
+    "feedback": [
+      { "awardedPoints": 1, "message": "Well done" }
+    ]
+  },
+  "timestamp": "2026-08-04T14:23:02.310Z"
+}
+```
+
+Delivery is best-effort and never blocks or fails the evaluation itself: each callback POST is bounded by `--progress-callback-timeout` (default `1s`, see [Usage](#usage)); a slow, unreachable, or erroring receiver is logged and skipped, never surfaced to the caller as an evaluation failure.
+
+#### Callback URL safety (SSRF protection)
+
+Since `callbackUrl` is caller-supplied, the shim guards against it being used to reach services it shouldn't be able to reach:
+
+- **By default**, callback delivery refuses to dial loopback, link-local (this includes cloud metadata endpoints like `169.254.169.254`), and private (RFC1918/RFC4193) IP addresses — checked against the address actually resolved and dialed, not just the URL's literal hostname, so a public-looking domain that resolves to a private address is still blocked. Set `--progress-allow-private-networks` only if the callback target is known to live on a private network you trust (e.g. a same-VPC service).
+- **`--progress-allowed-hosts`** optionally restricts callback URLs to an explicit list of hostnames (exact match, or `*.example.com` wildcards). Unset means any (non-private) host is accepted.
+
+A rejected callback URL behaves like any other delivery failure: it's logged and skipped, never surfaced to the caller as an evaluation failure.
+
+> **Note:** the µEd spec describes `callbackUrl` for asynchronous *final-result* delivery — the service may return `202 Accepted` immediately and POST the result later. The shim doesn't implement that 202 flow; it always responds synchronously with `200 OK` and the feedback body as normal. It reuses the same `callbackUrl` field to additionally deliver progress events — including the final feedback, via the `completed` event's `data` field — rather than requiring a shim-specific header for the same concept.
 
 ### Communication Channels
 

@@ -325,10 +325,15 @@ func newProgressCallbackServer(t *testing.T, handlerFn http.HandlerFunc) (*httpt
 	return srv, &received
 }
 
+// newProgressFactory builds a factory with SSRF protection relaxed: these
+// tests use httptest.NewServer (a loopback address) to stand in for the
+// caller's real, non-loopback callback receiver, so the default
+// private-network guard would otherwise reject every delivery here. The
+// guard itself is covered directly in internal/progress.
 func newProgressFactory(t *testing.T, timeout time.Duration) progress.Factory {
 	t.Helper()
 	return progress.NewHTTPFactory(progress.HTTPFactoryParams{
-		Config: progress.Config{CallbackTimeout: timeout},
+		Config: progress.Config{CallbackTimeout: timeout, AllowPrivateNetworks: true},
 		Log:    zap.NewNop(),
 	})
 }
@@ -673,4 +678,63 @@ func TestMuEdServeHealth_UnsupportedVersionHeader(t *testing.T) {
 	assert.Equal(t, "VERSION_NOT_SUPPORTED", body["code"])
 
 	mockRuntime.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)
+}
+
+// --- Request ID tests (ServeEvaluate) ---
+
+func TestMuEdServeEvaluate_RequestID_EchoedWhenSupplied(t *testing.T) {
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).
+		Return(evalHandlerResponse(true, "ok"))
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(mathEvalBody(t)))
+	req.Header.Set(muEdRequestIDHeader, "caller-supplied-id")
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(mockHandler, nil, "").ServeEvaluate(w, req)
+
+	assert.Equal(t, "caller-supplied-id", w.Result().Header.Get(muEdRequestIDHeader))
+}
+
+func TestMuEdServeEvaluate_RequestID_GeneratedWhenAbsent(t *testing.T) {
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).
+		Return(evalHandlerResponse(true, "ok"))
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(mathEvalBody(t)))
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(mockHandler, nil, "").ServeEvaluate(w, req)
+
+	assert.NotEmpty(t, w.Result().Header.Get(muEdRequestIDHeader))
+}
+
+func TestMuEdServeEvaluate_RequestID_EchoedOnErrorResponses(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader([]byte("not json")))
+	req.Header.Set(muEdRequestIDHeader, "caller-supplied-id")
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(new(MockHandler), nil, "").ServeEvaluate(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Result().StatusCode)
+	assert.Equal(t, "caller-supplied-id", w.Result().Header.Get(muEdRequestIDHeader))
+}
+
+func TestMuEdServeEvaluate_ProgressCallback_GeneratedRequestIDUsedAsCorrelation(t *testing.T) {
+	srv, received := newProgressCallbackServer(t, nil)
+
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).
+		Return(evalHandlerResponse(true, "Well done"))
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(mathEvalBodyWithCallback(t, srv.URL)))
+	w := httptest.NewRecorder()
+
+	newMuEdHandlerWithProgress(mockHandler, nil, "", newProgressFactory(t, time.Second)).ServeEvaluate(w, req)
+
+	respRequestID := w.Result().Header.Get(muEdRequestIDHeader)
+	require.NotEmpty(t, respRequestID)
+
+	require.Len(t, *received, 1)
+	assert.Equal(t, respRequestID, (*received)[0]["correlationId"])
 }

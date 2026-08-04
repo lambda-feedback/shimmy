@@ -18,6 +18,21 @@ type Config struct {
 	// CallbackTimeout bounds a single progress callback POST. If unset
 	// (or <= 0), defaultCallbackTimeout is used.
 	CallbackTimeout time.Duration `conf:"callback_timeout"`
+
+	// AllowedHosts, if non-empty, restricts callback URLs to these hosts.
+	// Entries may be an exact hostname (e.g. "api.example.com") or a
+	// "*.example.com" wildcard matching any subdomain. Empty means no
+	// host restriction — callback delivery is still subject to the
+	// private-network protection below.
+	AllowedHosts []string `conf:"allowed_hosts"`
+
+	// AllowPrivateNetworks disables the default SSRF protection that
+	// refuses to dial loopback, link-local (including cloud metadata
+	// endpoints such as 169.254.169.254), and private (RFC1918/RFC4193)
+	// IP addresses, however the URL's hostname resolves. Only enable
+	// this if shimmy's callback targets are known to live on a private
+	// network you trust (e.g. a same-VPC service).
+	AllowPrivateNetworks bool `conf:"allow_private_networks"`
 }
 
 // Factory builds a per-request Reporter from caller-supplied callback
@@ -39,9 +54,10 @@ type HTTPFactoryParams struct {
 }
 
 type HTTPFactory struct {
-	client  *http.Client
-	timeout time.Duration
-	log     *zap.Logger
+	client       *http.Client
+	timeout      time.Duration
+	log          *zap.Logger
+	allowedHosts []string
 }
 
 var _ Factory = (*HTTPFactory)(nil)
@@ -49,21 +65,27 @@ var _ Factory = (*HTTPFactory)(nil)
 // NewHTTPFactory builds a Factory that delivers progress events as
 // outbound HTTP POST requests.
 //
-// The URL supplied to NewReporter is trusted as-is: today the only caller
-// of shimmy's /evaluate endpoint is client-backend, already authenticated
-// via the shared Auth.Key. If shimmy ever accepts callback URLs from less
-// trusted callers, this is the place to add a host allowlist to close off
-// the resulting SSRF surface.
+// Since the callback URL is caller-supplied, delivery is guarded against
+// SSRF by default: the underlying transport refuses to dial loopback,
+// link-local, or private IP addresses (see Config.AllowPrivateNetworks),
+// and Config.AllowedHosts can further restrict which hostnames are
+// accepted at all.
 func NewHTTPFactory(params HTTPFactoryParams) Factory {
 	timeout := params.Config.CallbackTimeout
 	if timeout <= 0 {
 		timeout = defaultCallbackTimeout
 	}
 
+	client := &http.Client{}
+	if !params.Config.AllowPrivateNetworks {
+		client.Transport = newSSRFGuardedTransport()
+	}
+
 	return &HTTPFactory{
-		client:  &http.Client{},
-		timeout: timeout,
-		log:     params.Log,
+		client:       client,
+		timeout:      timeout,
+		log:          params.Log,
+		allowedHosts: params.Config.AllowedHosts,
 	}
 }
 
@@ -75,6 +97,10 @@ func (f *HTTPFactory) NewReporter(callbackURL, correlationID string) (Reporter, 
 	u, err := url.ParseRequestURI(callbackURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, fmt.Errorf("invalid progress callback url: %q", callbackURL)
+	}
+
+	if len(f.allowedHosts) > 0 && !hostAllowed(u.Hostname(), f.allowedHosts) {
+		return nil, fmt.Errorf("progress callback host %q is not in the allowed hosts list", u.Hostname())
 	}
 
 	return newHTTPReporter(f.client, callbackURL, correlationID, f.timeout, f.log.Named("progress")), nil
