@@ -8,9 +8,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/lambda-feedback/shimmy/config"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 	"github.com/lambda-feedback/shimmy/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -39,12 +42,23 @@ func (m *MockRuntime) Shutdown(ctx context.Context) error {
 
 // --- Helpers ---
 
+// newMuEdHandler builds a handler with a default, inert progress factory:
+// since none of the existing tests set the X-Progress-Callback-Url header,
+// NewReporter always returns (nil, nil) and behavior is unchanged. Tests
+// that exercise progress reporting itself use newMuEdHandlerWithProgress.
 func newMuEdHandler(h runtime.Handler, r runtime.Runtime, key string) *MuEdHandler {
+	return newMuEdHandlerWithProgress(h, r, key, progress.NewHTTPFactory(progress.HTTPFactoryParams{
+		Log: zap.NewNop(),
+	}))
+}
+
+func newMuEdHandlerWithProgress(h runtime.Handler, r runtime.Runtime, key string, pf progress.Factory) *MuEdHandler {
 	return &MuEdHandler{
-		handler: h,
-		runtime: r,
-		config:  config.Config{Auth: config.AuthConfig{Key: key}},
-		log:     zap.NewNop(),
+		handler:         h,
+		runtime:         r,
+		config:          config.Config{Auth: config.AuthConfig{Key: key}},
+		log:             zap.NewNop(),
+		progressFactory: pf,
 	}
 }
 
@@ -272,6 +286,155 @@ func TestMuEdServeEvaluate_WorkerErrorForwarded(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
 	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
 	assert.Equal(t, errorBody, bytes.TrimRight(raw, "\n"))
+}
+
+// --- Progress callback tests (ServeEvaluate) ---
+
+// newProgressCallbackServer spins up a fake progress-callback receiver
+// that records every decoded request body it receives.
+func newProgressCallbackServer(t *testing.T, handlerFn http.HandlerFunc) (*httptest.Server, *[]map[string]any) {
+	t.Helper()
+
+	var mu sync.Mutex
+	var received []map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		received = append(received, body)
+		mu.Unlock()
+
+		if handlerFn != nil {
+			handlerFn(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv, &received
+}
+
+func newProgressFactory(t *testing.T, timeout time.Duration) progress.Factory {
+	t.Helper()
+	return progress.NewHTTPFactory(progress.HTTPFactoryParams{
+		Config: progress.Config{CallbackTimeout: timeout},
+		Log:    zap.NewNop(),
+	})
+}
+
+func TestMuEdServeEvaluate_ProgressCallback_Success(t *testing.T) {
+	srv, received := newProgressCallbackServer(t, nil)
+
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).
+		Return(evalHandlerResponse(true, "Well done"))
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(mathEvalBody(t)))
+	req.Header.Set(progressCallbackURLHeader, srv.URL)
+	req.Header.Set(progressCorrelationIDHeader, "corr-1")
+	w := httptest.NewRecorder()
+
+	newMuEdHandlerWithProgress(mockHandler, nil, "", newProgressFactory(t, time.Second)).ServeEvaluate(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+
+	require.Len(t, *received, 1)
+	evt := (*received)[0]
+	assert.Equal(t, "corr-1", evt["correlationId"])
+	assert.Equal(t, "feedback_ready", evt["stage"])
+	assert.Equal(t, "eval", evt["command"])
+}
+
+func TestMuEdServeEvaluate_ProgressCallback_Failure(t *testing.T) {
+	srv, received := newProgressCallbackServer(t, nil)
+
+	errorBody, _ := json.Marshal(map[string]any{
+		"error": map[string]any{"message": "boom"},
+	})
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).Return(runtime.Response{
+		StatusCode: http.StatusInternalServerError,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       errorBody,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(mathEvalBody(t)))
+	req.Header.Set(progressCallbackURLHeader, srv.URL)
+	req.Header.Set(progressCorrelationIDHeader, "corr-2")
+	w := httptest.NewRecorder()
+
+	newMuEdHandlerWithProgress(mockHandler, nil, "", newProgressFactory(t, time.Second)).ServeEvaluate(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Result().StatusCode)
+
+	require.Len(t, *received, 1)
+	evt := (*received)[0]
+	assert.Equal(t, "corr-2", evt["correlationId"])
+	assert.Equal(t, "failed", evt["stage"])
+	assert.Equal(t, "boom", evt["message"])
+}
+
+func TestMuEdServeEvaluate_ProgressCallback_NoHeader_Unchanged(t *testing.T) {
+	_, received := newProgressCallbackServer(t, nil)
+
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).
+		Return(evalHandlerResponse(true, "Well done"))
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(mathEvalBody(t)))
+	w := httptest.NewRecorder()
+
+	newMuEdHandlerWithProgress(mockHandler, nil, "", newProgressFactory(t, time.Second)).ServeEvaluate(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.Empty(t, *received, "no progress callback header should mean no callback requests")
+}
+
+func TestMuEdServeEvaluate_ProgressCallback_InvalidURL_EvaluationStillSucceeds(t *testing.T) {
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).
+		Return(evalHandlerResponse(true, "Well done"))
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(mathEvalBody(t)))
+	req.Header.Set(progressCallbackURLHeader, "not-a-url")
+	w := httptest.NewRecorder()
+
+	newMuEdHandlerWithProgress(mockHandler, nil, "", newProgressFactory(t, time.Second)).ServeEvaluate(w, req)
+
+	res := w.Result()
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+
+	assert.Equal(t, http.StatusOK, res.StatusCode)
+
+	var feedback []map[string]any
+	require.NoError(t, json.Unmarshal(body, &feedback))
+	require.Len(t, feedback, 1)
+}
+
+func TestMuEdServeEvaluate_ProgressCallback_SlowReceiver_DoesNotBlockResponse(t *testing.T) {
+	srv, _ := newProgressCallbackServer(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).
+		Return(evalHandlerResponse(true, "Well done"))
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(mathEvalBody(t)))
+	req.Header.Set(progressCallbackURLHeader, srv.URL)
+	req.Header.Set(progressCorrelationIDHeader, "corr-3")
+	w := httptest.NewRecorder()
+
+	start := time.Now()
+	newMuEdHandlerWithProgress(mockHandler, nil, "", newProgressFactory(t, 20*time.Millisecond)).ServeEvaluate(w, req)
+	elapsed := time.Since(start)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	assert.Less(t, elapsed, 150*time.Millisecond, "ServeEvaluate should return promptly, bounded by CallbackTimeout")
 }
 
 // --- ServeHealth tests ---

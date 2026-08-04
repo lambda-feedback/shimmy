@@ -1,6 +1,9 @@
 package config
 
-import "github.com/lambda-feedback/shimmy/runtime"
+import (
+	"github.com/lambda-feedback/shimmy/internal/progress"
+	"github.com/lambda-feedback/shimmy/runtime"
+)
 
 type MessageEncoding string
 
@@ -25,4 +28,7 @@ type Config struct {
 
 	// Auth is the authentication configuration
 	Auth AuthConfig `conf:"auth"`
+
+	// Progress is the configuration for outbound progress-callback delivery
+	Progress progress.Config `conf:"progress"`
 }

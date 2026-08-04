@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution/worker"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 type Supervisor interface {
@@ -165,12 +166,28 @@ func (s *WorkerSupervisor) Send(
 
 	worker, err := s.acquireWorker(ctx)
 	if err != nil {
+		progress.Emit(ctx, progress.Event{
+			Stage:   progress.StageFailed,
+			Command: method,
+			Message: "failed to acquire worker",
+			Error:   err.Error(),
+		})
 		return nil, fmt.Errorf("failed to acquire worker: %w", err)
 	}
+	progress.Emit(ctx, progress.Event{Stage: progress.StageWorkerAcquired, Command: method})
 
 	// NOTICE: unconventional error handling ahead, as we need
 	//         to release the worker before returning the error.
+	progress.Emit(ctx, progress.Event{Stage: progress.StageRunning, Command: method})
 	resData, err := worker.Send(ctx, method, data, s.sendParams.Timeout)
+	if err != nil {
+		progress.Emit(ctx, progress.Event{
+			Stage:   progress.StageFailed,
+			Command: method,
+			Message: "worker execution failed",
+			Error:   err.Error(),
+		})
+	}
 
 	release, releaseErr := s.releaseWorker()
 	if releaseErr != nil {

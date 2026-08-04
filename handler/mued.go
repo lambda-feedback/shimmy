@@ -10,33 +10,45 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/config"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 	"github.com/lambda-feedback/shimmy/runtime"
 )
 
 const muEdVersionHeader = "X-Api-Version"
 
+// Progress-reporting headers. Deliberately distinct from the callbackUrl/
+// X-Request-Id pair documented (but not yet implemented) in the µEd schema
+// for a different, unrelated feature (async whole-result delivery).
+const (
+	progressCallbackURLHeader   = "X-Progress-Callback-Url"
+	progressCorrelationIDHeader = "X-Progress-Correlation-Id"
+)
+
 type MuEdHandlerParams struct {
 	fx.In
 
-	Handler runtime.Handler
-	Runtime runtime.Runtime
-	Config  config.Config
-	Log     *zap.Logger
+	Handler         runtime.Handler
+	Runtime         runtime.Runtime
+	Config          config.Config
+	Log             *zap.Logger
+	ProgressFactory progress.Factory
 }
 
 type MuEdHandler struct {
-	handler runtime.Handler
-	runtime runtime.Runtime
-	config  config.Config
-	log     *zap.Logger
+	handler         runtime.Handler
+	runtime         runtime.Runtime
+	config          config.Config
+	log             *zap.Logger
+	progressFactory progress.Factory
 }
 
 func NewMuEdHandler(params MuEdHandlerParams) *MuEdHandler {
 	return &MuEdHandler{
-		handler: params.Handler,
-		runtime: params.Runtime,
-		config:  params.Config,
-		log:     params.Log,
+		handler:         params.Handler,
+		runtime:         params.Runtime,
+		config:          params.Config,
+		log:             params.Log,
+		progressFactory: params.ProgressFactory,
 	}
 }
 
@@ -157,9 +169,26 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		Header: header,
 	}
 
-	resp := h.handler.Handle(r.Context(), req)
+	ctx := r.Context()
+	reporter, err := h.progressFactory.NewReporter(
+		r.Header.Get(progressCallbackURLHeader),
+		r.Header.Get(progressCorrelationIDHeader),
+	)
+	if err != nil {
+		h.log.Warn("invalid progress callback header, disabling progress reporting", zap.Error(err))
+	} else if reporter != nil {
+		ctx = progress.ContextWithReporter(ctx, reporter)
+	}
+
+	resp := h.handler.Handle(ctx, req)
 
 	if resp.StatusCode != http.StatusOK {
+		progress.Emit(ctx, progress.Event{
+			Stage:   progress.StageFailed,
+			Command: string(command),
+			Message: muEdErrorMessageFromBody(resp.Body),
+		})
+
 		for k, v := range resp.Header {
 			for _, vv := range v {
 				w.Header().Add(k, vv)
@@ -190,10 +219,35 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		feedback = runtime.MuEdToEvaluateFeedback(result)
 	}
 
+	progress.Emit(ctx, progress.Event{Stage: progress.StageFeedbackReady, Command: string(command)})
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(muEdVersionHeader, version)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(feedback) //nolint:errcheck
+}
+
+// muEdErrorMessageFromBody best-effort extracts a human-readable message
+// from a JSON error body of the shape {"error": {"message": "..."}}.
+func muEdErrorMessageFromBody(body []byte) string {
+	const fallback = "evaluation failed"
+
+	var errBody map[string]any
+	if err := json.Unmarshal(body, &errBody); err != nil {
+		return fallback
+	}
+
+	errObj, ok := errBody["error"].(map[string]any)
+	if !ok {
+		return fallback
+	}
+
+	msg, ok := errObj["message"].(string)
+	if !ok || msg == "" {
+		return fallback
+	}
+
+	return msg
 }
 
 // ServeHealth handles GET /evaluate/health.

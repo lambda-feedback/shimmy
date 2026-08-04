@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 func TestSupervisor_New_DefaultWorkerFactory(t *testing.T) {
@@ -278,6 +279,101 @@ func TestSupervisor_Send_Fails(t *testing.T) {
 	res, err := s.Send(context.Background(), "test", data)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.NotNil(t, res)
+}
+
+// MARK: - progress
+
+func TestSupervisor_Send_EmitsWorkerAcquiredAndRunning(t *testing.T) {
+	s, a, err := createSupervisor(t, supervisor.RpcIO)
+	assert.NoError(t, err)
+
+	data := map[string]any{"data": "data"}
+	resData := map[string]any{"result": "result"}
+
+	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(resData, nil)
+
+	r := &fakeReporter{}
+	ctx := progress.ContextWithReporter(context.Background(), r)
+
+	_, err = s.Send(ctx, "test", data)
+	assert.NoError(t, err)
+
+	assert.Equal(t, []progress.Stage{
+		progress.StageWorkerAcquired,
+		progress.StageRunning,
+	}, r.stages())
+}
+
+func TestSupervisor_Send_EmitsFailed_WhenAcquireFails(t *testing.T) {
+	mockFactory := func(supervisor.AdapterWorkerFactoryFn, supervisor.IOConfig, *zap.Logger) (supervisor.Adapter, error) {
+		return nil, assert.AnError
+	}
+
+	s, err := createSupervisorWithFactory(supervisor.RpcIO, mockFactory)
+	assert.NoError(t, err)
+
+	r := &fakeReporter{}
+	ctx := progress.ContextWithReporter(context.Background(), r)
+
+	data := map[string]any{"data": "data"}
+	_, err = s.Send(ctx, "test", data)
+	assert.ErrorIs(t, err, assert.AnError)
+
+	assert.Equal(t, []progress.Stage{progress.StageFailed}, r.stages())
+}
+
+func TestSupervisor_Send_EmitsFailed_WhenWorkerSendFails(t *testing.T) {
+	s, a, err := createSupervisor(t, supervisor.RpcIO)
+	assert.NoError(t, err)
+
+	data := map[string]any{"data": "data"}
+
+	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(nil, assert.AnError)
+
+	r := &fakeReporter{}
+	ctx := progress.ContextWithReporter(context.Background(), r)
+
+	_, err = s.Send(ctx, "test", data)
+	assert.ErrorIs(t, err, assert.AnError)
+
+	assert.Equal(t, []progress.Stage{
+		progress.StageWorkerAcquired,
+		progress.StageRunning,
+		progress.StageFailed,
+	}, r.stages())
+}
+
+func TestSupervisor_Send_NoReporterInContext_BehavesUnchanged(t *testing.T) {
+	s, a, err := createSupervisor(t, supervisor.RpcIO)
+	assert.NoError(t, err)
+
+	data := map[string]any{"data": "data"}
+	resData := map[string]any{"result": "result"}
+
+	a.EXPECT().Start(mock.Anything, mock.Anything).Return(nil)
+	a.EXPECT().Send(mock.Anything, "test", data, mock.Anything).Return(resData, nil)
+
+	res, err := s.Send(context.Background(), "test", data)
+	assert.NoError(t, err)
+	assert.Equal(t, resData, res.Data)
+}
+
+type fakeReporter struct {
+	events []progress.Event
+}
+
+func (r *fakeReporter) Report(_ context.Context, evt progress.Event) {
+	r.events = append(r.events, evt)
+}
+
+func (r *fakeReporter) stages() []progress.Stage {
+	stages := make([]progress.Stage, len(r.events))
+	for i, evt := range r.events {
+		stages[i] = evt.Stage
+	}
+	return stages
 }
 
 // MARK: - mocks
