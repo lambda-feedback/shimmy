@@ -33,6 +33,12 @@ type Config struct {
 	// this if shimmy's callback targets are known to live on a private
 	// network you trust (e.g. a same-VPC service).
 	AllowPrivateNetworks bool `conf:"allow_private_networks"`
+
+	// Sidecar bounds worker-authored progress events delivered via the
+	// EVAL_PROGRESS_URL side-channel (see sidecar.go), before they're
+	// relayed through the same outbound delivery path as shim-authored
+	// events.
+	Sidecar SidecarConfig `conf:"sidecar"`
 }
 
 // Factory builds a per-request Reporter from caller-supplied callback

@@ -75,6 +75,11 @@ type Params struct {
 	// is called when the supervisor needs to create a new worker.
 	WorkerFactory WorkerFactoryFn
 
+	// Progress configures worker-authored progress event delivery (the
+	// EVAL_PROGRESS_URL side-channel). Only used when AdapterFactory is
+	// nil, since the default adapter factory is what wires it up.
+	Progress progress.Config
+
 	// Log is the logger to use for the supervisor
 	Log *zap.Logger
 }
@@ -100,7 +105,7 @@ func New(params Params) (Supervisor, error) {
 	}
 
 	if params.AdapterFactory == nil {
-		params.AdapterFactory = defaultAdapterFactory
+		params.AdapterFactory = newDefaultAdapterFactory(params.Progress)
 	}
 
 	createAdapter := func() (*workerRef, error) {

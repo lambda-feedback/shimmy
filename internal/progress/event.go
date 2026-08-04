@@ -22,6 +22,13 @@ const (
 
 	// StageFailed indicates a terminal failure at any layer of the pipeline.
 	StageFailed Stage = "failed"
+
+	// StageProgress indicates a custom, evaluation-function-authored
+	// progress update. Unlike the other stages, these are never emitted
+	// by shimmy itself — only relayed from a worker's local progress
+	// side-channel (see Sidecar). A worker cannot claim any other stage;
+	// the wire contract for that side-channel has no way to set Stage.
+	StageProgress Stage = "progress"
 )
 
 // terminal reports whether the stage marks the end of an evaluation's
@@ -51,9 +58,9 @@ type Event struct {
 
 	// Data is a free-form extension point. On StageCompleted it carries
 	// the evaluation's feedback payload (so a callbackUrl-supplying
-	// caller gets the final result, not just a status ping). Otherwise
-	// it's reserved for future events, e.g. ones emitted by the
-	// evaluation function process itself.
+	// caller gets the final result, not just a status ping). On
+	// StageProgress it carries whatever the evaluation function attached
+	// to its custom event (see Sidecar).
 	Data map[string]any
 
 	// Timestamp is set by Emit, not by callers.

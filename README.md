@@ -61,6 +61,9 @@ GLOBAL OPTIONS:
    --progress-callback-timeout value          the timeout for a single progress callback delivery. (default: 1s) [$PROGRESS_CALLBACK_TIMEOUT]
    --progress-allowed-hosts value [ --progress-allowed-hosts value ]  restrict progress callback URLs to these hosts. Entries may be an exact hostname or a "*.example.com" wildcard. Unset allows any host, subject to the private-network guard below. [$PROGRESS_ALLOWED_HOSTS]
    --progress-allow-private-networks          allow progress callback delivery to loopback, link-local, and private IP addresses. Leave disabled unless the callback target is known to live on a trusted private network. (default: false) [$PROGRESS_ALLOW_PRIVATE_NETWORKS]
+   --progress-sidecar-max-body-bytes value     the maximum size, in bytes, of a single worker-authored progress event POST. (default: 16384) [$PROGRESS_SIDECAR_MAX_BODY_BYTES]
+   --progress-sidecar-max-events value         the maximum number of worker-authored progress events relayed per evaluation. (default: 50) [$PROGRESS_SIDECAR_MAX_EVENTS]
+   --progress-sidecar-min-event-interval value  the minimum spacing between worker-authored progress events relayed per evaluation. (default: 200ms) [$PROGRESS_SIDECAR_MIN_EVENT_INTERVAL]
 
    function
 
@@ -260,6 +263,39 @@ A rejected callback URL behaves like any other delivery failure: it's logged and
 
 > **Note:** the µEd spec describes `callbackUrl` for asynchronous *final-result* delivery — the service may return `202 Accepted` immediately and POST the result later. The shim doesn't implement that 202 flow; it always responds synchronously with `200 OK` and the feedback body as normal. It reuses the same `callbackUrl` field to additionally deliver progress events — including the final feedback, via the `completed` event's `data` field — rather than requiring a shim-specific header for the same concept.
 
+#### Custom progress events from the evaluation function
+
+The four stages above are emitted by shimmy itself, around the evaluation function call as a whole — `evaluating` covers the entire invocation as one span. An evaluation function that does multiple steps internally (e.g. several model calls) can emit its own progress events *during* that span, which are relayed through the same `callbackUrl` alongside shimmy's own events.
+
+When a request opts in to progress reporting (via `callbackUrl`), shimmy starts a loopback-only HTTP listener and passes its address to the evaluation function process as the `EVAL_PROGRESS_URL` environment variable, the same way it passes `EVAL_RPC_TRANSPORT`, `EVAL_FILE_NAME_REQUEST`, etc. (see [Communication Channels](#communication-channels) below). This works identically regardless of interface (`rpc` or `file`) or RPC transport, and regardless of the evaluation function's language — it only needs to be able to make an HTTP POST.
+
+To emit a custom event, `POST` a small JSON body to `EVAL_PROGRESS_URL`:
+
+```json
+{
+  "message": "Checking correctness…",
+  "data": { "step": 2, "of": 3 }
+}
+```
+
+- `message` (string, required): student/teacher-facing text.
+- `data` (object, optional): free-form, passed through as-is.
+- There is no `stage` field, by design: an evaluation function can never claim `preparing`, `evaluating`, `completed`, or `failed` — those remain exclusively shim-authored. Custom events are always delivered with `"stage": "progress"`.
+
+The response status is informational only — the evaluation function should treat every response as fire-and-forget and never fail on a non-2xx status. Delivery is best-effort, same as outbound callback delivery: `202` accepted (delivery to `callbackUrl` is then attempted in the background), `400` malformed body or empty `message`, `413` body too large, `429` rate limited, `503` no request currently associated with the listener (e.g. a stray POST after the request has already finished).
+
+To bound how much an evaluation function (which may be running untrusted, sandboxed code) can push through this channel, events are capped before relay:
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--progress-sidecar-max-body-bytes` | `PROGRESS_SIDECAR_MAX_BODY_BYTES` | `16384` | Maximum size, in bytes, of a single event POST. |
+| `--progress-sidecar-max-events` | `PROGRESS_SIDECAR_MAX_EVENTS` | `50` | Maximum number of events relayed per evaluation. |
+| `--progress-sidecar-min-event-interval` | `PROGRESS_SIDECAR_MIN_EVENT_INTERVAL` | `200ms` | Minimum spacing between relayed events. |
+
+> **Sandboxing note:** under `--sandbox` alone, the worker keeps the host network namespace and can reach the loopback listener normally. Only the separate, explicit `--sandbox-disable-network` flag isolates networking (and loopback specifically) — under that flag, custom progress events are silently dropped, the same as any other best-effort delivery failure.
+
+This is a shim-side contract only; no client library ships in this repo. Evaluation function libraries (e.g. per-language toolkits) can build a thin wrapper around reading `EVAL_PROGRESS_URL` and POSTing to it.
+
 ### Communication Channels
 
 The shim supports two interface modes, selected with `--interface`:
@@ -286,6 +322,7 @@ The shim injects the following environment variables into the evaluation functio
 | `EVAL_RPC_HTTP_URL` | HTTP URL (HTTP transport only) |
 | `EVAL_RPC_WS_URL` | WebSocket URL (WS transport only) |
 | `EVAL_RPC_TCP_ADDRESS` | TCP address (TCP transport only) |
+| `EVAL_PROGRESS_URL` | Local URL to POST [custom progress events](#custom-progress-events-from-the-evaluation-function) to (only set when the request opted in via `callbackUrl`) |
 
 #### File System (`--interface file`)
 
@@ -311,6 +348,7 @@ The shim also sets the following environment variables:
 | `EVAL_IO` | `FILE` |
 | `EVAL_FILE_NAME_REQUEST` | Path to the input file |
 | `EVAL_FILE_NAME_RESPONSE` | Path to the output file |
+| `EVAL_PROGRESS_URL` | Local URL to POST [custom progress events](#custom-progress-events-from-the-evaluation-function) to (only set when the request opted in via `callbackUrl`) |
 
 > Using the file interface is recommended for large payloads such as base64-encoded images.
 

@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution/worker"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 // RpcConfig describes the configuration for the rpc interface.
@@ -91,16 +92,27 @@ type rpcAdapter struct {
 
 	config RpcConfig
 	log    *zap.Logger
+
+	// sidecarCfg configures the worker-authored progress side-channel.
+	sidecarCfg progress.SidecarConfig
+
+	// sidecar is the loopback HTTP listener for worker-authored progress
+	// events, injected into the worker's env as EVAL_PROGRESS_URL. It
+	// lives for this adapter's whole lifetime (one persistent worker can
+	// serve many requests), and is Bind/Unbind-ed around each Send call.
+	sidecar *progress.Sidecar
 }
 
 func newRpcAdapter(
 	workerFactory AdapterWorkerFactoryFn,
 	config RpcConfig,
+	sidecarCfg progress.SidecarConfig,
 	log *zap.Logger,
 ) *rpcAdapter {
 	return &rpcAdapter{
 		workerFactory: workerFactory,
 		config:        config,
+		sidecarCfg:    sidecarCfg,
 		log:           log.Named("adapter_rpc"),
 	}
 }
@@ -113,7 +125,13 @@ func (a *rpcAdapter) Start(
 		return errors.New("no worker factory provided")
 	}
 
-	params.Env = buildEnv(params.Env, a.config)
+	sidecar, err := progress.NewSidecar(a.sidecarCfg, a.log)
+	if err != nil {
+		return fmt.Errorf("error starting progress sidecar: %w", err)
+	}
+	a.sidecar = sidecar
+
+	params.Env = buildEnv(params.Env, a.config, sidecar.URL())
 
 	// create the worker
 	worker, err := a.workerFactory(params)
@@ -164,6 +182,15 @@ func (a *rpcAdapter) Send(
 		return nil, errors.New("rpc client not available")
 	}
 
+	if a.sidecar != nil {
+		// sendLock in the calling supervisor guarantees only one request
+		// is ever in flight per worker; Unbind closes the narrow window
+		// between this call returning and the next one starting, so a
+		// straggling POST from the worker can't be misattributed.
+		a.sidecar.Bind(method, progress.FromContext(ctx))
+		defer a.sidecar.Unbind()
+	}
+
 	var result map[string]any
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -179,6 +206,12 @@ func (a *rpcAdapter) Send(
 func (a *rpcAdapter) Stop() (ReleaseFunc, error) {
 	if a.worker == nil {
 		return nil, errors.New("no worker provided")
+	}
+
+	if a.sidecar != nil {
+		if err := a.sidecar.Close(); err != nil {
+			a.log.Warn("error closing progress sidecar", zap.Error(err))
+		}
 	}
 
 	return stopWorker(a.worker)
@@ -283,7 +316,7 @@ func getIPCEndpoint(config IpcTransportConfig) string {
 	}
 }
 
-func buildEnv(env []string, config RpcConfig) []string {
+func buildEnv(env []string, config RpcConfig, progressURL string) []string {
 	if env == nil {
 		env = make([]string, 0)
 	}
@@ -302,6 +335,10 @@ func buildEnv(env []string, config RpcConfig) []string {
 		env = append(env, "EVAL_RPC_WS_URL="+config.Ws.Url)
 	case TcpTransport:
 		env = append(env, "EVAL_RPC_TCP_ADDRESS="+config.Tcp.Address)
+	}
+
+	if progressURL != "" {
+		env = append(env, "EVAL_PROGRESS_URL="+progressURL)
 	}
 
 	return env
