@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"time"
 
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
@@ -9,15 +10,17 @@ import (
 )
 
 type Shell struct {
-	log     *zap.Logger
-	fxApp   *fx.App
-	options []fx.Option
+	log          *zap.Logger
+	fxApp        *fx.App
+	startTimeout time.Duration
+	options      []fx.Option
 }
 
-func New(log *zap.Logger, options ...fx.Option) *Shell {
+func New(log *zap.Logger, startTimeout time.Duration, options ...fx.Option) *Shell {
 	return &Shell{
-		log:     log,
-		options: options,
+		log:          log,
+		startTimeout: startTimeout,
+		options:      options,
 	}
 }
 
@@ -80,10 +83,13 @@ func (s *Shell) createFxApp(ctx context.Context, options ...fx.Option) *fx.App {
 			return &fxevent.ZapLogger{Logger: s.log.Named("fx")}
 		}),
 
-		// 5. provide user-provided options
+		// 5. configure the application start timeout
+		fx.StartTimeout(s.startTimeout),
+
+		// 6. provide user-provided options
 		fx.Options(s.options...),
 
-		// 5. provide user-provided run options
+		// 7. provide user-provided run options
 		fx.Options(options...),
 	)
 }
