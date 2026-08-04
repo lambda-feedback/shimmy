@@ -300,8 +300,8 @@ func TestSupervisor_Send_EmitsWorkerAcquiredAndRunning(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, []progress.Stage{
-		progress.StageWorkerAcquired,
-		progress.StageRunning,
+		progress.StagePreparing,
+		progress.StageEvaluating,
 	}, r.stages())
 }
 
@@ -339,8 +339,8 @@ func TestSupervisor_Send_EmitsFailed_WhenWorkerSendFails(t *testing.T) {
 	assert.ErrorIs(t, err, assert.AnError)
 
 	assert.Equal(t, []progress.Stage{
-		progress.StageWorkerAcquired,
-		progress.StageRunning,
+		progress.StagePreparing,
+		progress.StageEvaluating,
 		progress.StageFailed,
 	}, r.stages())
 }

@@ -7,16 +7,18 @@ import "time"
 type Stage string
 
 const (
-	// StageWorkerAcquired indicates a worker is ready to receive work,
-	// whether it was freshly booted or reused from a warm pool.
-	StageWorkerAcquired Stage = "worker_acquired"
+	// StagePreparing indicates the evaluation environment is being set up
+	// (a worker is ready to receive work, whether freshly booted or reused
+	// from a warm pool). Deliberately named around what a student or
+	// teacher would recognise, not shimmy's internal "worker" concept.
+	StagePreparing Stage = "preparing"
 
-	// StageRunning indicates the evaluation function is about to be invoked.
-	StageRunning Stage = "running"
+	// StageEvaluating indicates the submission is being evaluated.
+	StageEvaluating Stage = "evaluating"
 
-	// StageFeedbackReady indicates feedback has been computed and is about
+	// StageCompleted indicates feedback has been computed and is about
 	// to be returned to the caller.
-	StageFeedbackReady Stage = "feedback_ready"
+	StageCompleted Stage = "completed"
 
 	// StageFailed indicates a terminal failure at any layer of the pipeline.
 	StageFailed Stage = "failed"
@@ -26,7 +28,7 @@ const (
 // progress event stream. At most one terminal event is delivered per
 // Reporter instance.
 func (s Stage) terminal() bool {
-	return s == StageFeedbackReady || s == StageFailed
+	return s == StageCompleted || s == StageFailed
 }
 
 // Event describes a single progress update for an evaluation request.
@@ -37,10 +39,14 @@ type Event struct {
 	// Command is the µEd command being processed (e.g. "eval", "preview").
 	Command string
 
-	// Message is an optional human-readable note.
+	// Message is a short, student/teacher-facing description of this
+	// event, safe to display as-is (e.g. "Evaluating your submission…").
+	// It must never contain raw technical error detail — see Error.
 	Message string
 
-	// Error is populated only for StageFailed.
+	// Error carries raw technical error detail for StageFailed events,
+	// intended for logs/support diagnostics. Never display this to
+	// students or teachers directly; show Message instead.
 	Error string
 
 	// Data is a free-form extension point, reserved for future events

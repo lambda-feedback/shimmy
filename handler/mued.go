@@ -219,7 +219,11 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		feedback = runtime.MuEdToEvaluateFeedback(result)
 	}
 
-	progress.Emit(ctx, progress.Event{Stage: progress.StageFeedbackReady, Command: string(command)})
+	progress.Emit(ctx, progress.Event{
+		Stage:   progress.StageCompleted,
+		Command: string(command),
+		Message: "Feedback is ready.",
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set(muEdVersionHeader, version)
@@ -230,7 +234,7 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 // muEdErrorMessageFromBody best-effort extracts a human-readable message
 // from a JSON error body of the shape {"error": {"message": "..."}}.
 func muEdErrorMessageFromBody(body []byte) string {
-	const fallback = "evaluation failed"
+	const fallback = "We couldn't evaluate your answer. Please try again."
 
 	var errBody map[string]any
 	if err := json.Unmarshal(body, &errBody); err != nil {

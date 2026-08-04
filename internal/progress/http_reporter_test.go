@@ -34,7 +34,7 @@ func TestHTTPCallbackReporter_Report_DeliversPayload(t *testing.T) {
 	defer srv.Close()
 
 	r := newTestReporter(t, srv.URL, time.Second)
-	r.Report(context.Background(), Event{Stage: StageRunning, Command: "eval"})
+	r.Report(context.Background(), Event{Stage: StageEvaluating, Command: "eval"})
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -44,8 +44,8 @@ func TestHTTPCallbackReporter_Report_DeliversPayload(t *testing.T) {
 	if received[0].CorrelationID != "corr-1" {
 		t.Errorf("expected correlationId %q, got %q", "corr-1", received[0].CorrelationID)
 	}
-	if received[0].Stage != StageRunning {
-		t.Errorf("expected stage %q, got %q", StageRunning, received[0].Stage)
+	if received[0].Stage != StageEvaluating {
+		t.Errorf("expected stage %q, got %q", StageEvaluating, received[0].Stage)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestHTTPCallbackReporter_Report_TerminalEventDeliveredOnlyOnce(t *testing.T
 	// detecting failure and trying to emit a terminal event
 	r.Report(context.Background(), Event{Stage: StageFailed, Message: "boot failed"})
 	r.Report(context.Background(), Event{Stage: StageFailed, Message: "handler backstop"})
-	r.Report(context.Background(), Event{Stage: StageFeedbackReady})
+	r.Report(context.Background(), Event{Stage: StageCompleted})
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -89,8 +89,8 @@ func TestHTTPCallbackReporter_Report_NonTerminalEventsAllDelivered(t *testing.T)
 	defer srv.Close()
 
 	r := newTestReporter(t, srv.URL, time.Second)
-	r.Report(context.Background(), Event{Stage: StageWorkerAcquired})
-	r.Report(context.Background(), Event{Stage: StageRunning})
+	r.Report(context.Background(), Event{Stage: StagePreparing})
+	r.Report(context.Background(), Event{Stage: StageEvaluating})
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -109,7 +109,7 @@ func TestHTTPCallbackReporter_Report_SlowReceiver_BoundedByTimeout(t *testing.T)
 	r := newTestReporter(t, srv.URL, 20*time.Millisecond)
 
 	start := time.Now()
-	r.Report(context.Background(), Event{Stage: StageRunning})
+	r.Report(context.Background(), Event{Stage: StageEvaluating})
 	elapsed := time.Since(start)
 
 	if elapsed > 150*time.Millisecond {
@@ -119,5 +119,5 @@ func TestHTTPCallbackReporter_Report_SlowReceiver_BoundedByTimeout(t *testing.T)
 
 func TestHTTPCallbackReporter_Report_UnreachableURL_DoesNotPanic(t *testing.T) {
 	r := newTestReporter(t, "http://127.0.0.1:0", 50*time.Millisecond)
-	r.Report(context.Background(), Event{Stage: StageRunning})
+	r.Report(context.Background(), Event{Stage: StageEvaluating})
 }

@@ -56,7 +56,7 @@ func newHTTPReporter(
 // any error (invalid payload, dial failure, timeout, non-2xx response) is
 // logged and swallowed — it must never fail or slow down the evaluation
 // beyond the configured timeout. At most one terminal event (StageFailed
-// or StageFeedbackReady) is delivered per reporter instance, since both
+// or StageCompleted) is delivered per reporter instance, since both
 // the supervisor and handler layers can independently detect failure.
 func (r *httpCallbackReporter) Report(ctx context.Context, evt Event) {
 	if evt.Stage.terminal() {

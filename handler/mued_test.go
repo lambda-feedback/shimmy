@@ -343,7 +343,7 @@ func TestMuEdServeEvaluate_ProgressCallback_Success(t *testing.T) {
 	require.Len(t, *received, 1)
 	evt := (*received)[0]
 	assert.Equal(t, "corr-1", evt["correlationId"])
-	assert.Equal(t, "feedback_ready", evt["stage"])
+	assert.Equal(t, "completed", evt["stage"])
 	assert.Equal(t, "eval", evt["command"])
 }
 
