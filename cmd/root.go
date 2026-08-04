@@ -43,6 +43,14 @@ functions on arbitrary, serverless platforms.`
 				Category: "auth",
 				EnvVars:  []string{"AUTH_KEY"},
 			},
+			// progress flags
+			&cli.DurationFlag{
+				Name:     "progress-callback-timeout",
+				Usage:    "the timeout for a single progress callback delivery.",
+				Value:    time.Second,
+				Category: "progress",
+				EnvVars:  []string{"PROGRESS_CALLBACK_TIMEOUT"},
+			},
 			// shim flags
 			&cli.StringFlag{
 				Name:     "interface",
@@ -318,6 +326,7 @@ func parseRootConfig(ctx *cli.Context) (config.Config, error) {
 	// map cli flags to config fields
 	cliMap := map[string]string{
 		"auth-key":                   "auth.key",
+		"progress-callback-timeout":  "progress.callback_timeout",
 		"max-workers":                "runtime.max_workers",
 		"command":                    "runtime.cmd",
 		"cwd":                        "runtime.cwd",

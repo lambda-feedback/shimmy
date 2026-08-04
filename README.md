@@ -56,6 +56,10 @@ GLOBAL OPTIONS:
 
    --auth-key value, -k value  the authentication key to use for incoming requests. [$AUTH_KEY]
 
+   progress
+
+   --progress-callback-timeout value  the timeout for a single progress callback delivery. (default: 1s) [$PROGRESS_CALLBACK_TIMEOUT]
+
    function
 
    --arg value, -a value [ --arg value, -a value ]  additional arguments for to the worker process. [$FUNCTION_ARGS]
