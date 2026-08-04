@@ -98,7 +98,7 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 	healthResp := runtime.MuEdToChatHealthResponse(resultMap)
 
 	statusCode := http.StatusOK
-	if healthResp.Status == runtime.MuEdChatHealthStatusUnavailable {
+	if status, ok := healthResp["status"].(string); ok && status == string(runtime.MuEdChatHealthStatusUnavailable) {
 		statusCode = http.StatusServiceUnavailable
 	}
 

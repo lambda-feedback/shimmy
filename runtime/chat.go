@@ -21,6 +21,7 @@ const (
 	MuEdChatRoleUser      MuEdChatRole = "USER"
 	MuEdChatRoleAssistant MuEdChatRole = "ASSISTANT"
 	MuEdChatRoleSystem    MuEdChatRole = "SYSTEM"
+	MuEdChatRoleTool      MuEdChatRole = "TOOL"
 )
 
 type MuEdChatMessage struct {
@@ -28,52 +29,21 @@ type MuEdChatMessage struct {
 	Content string       `json:"content"`
 }
 
-type MuEdChatUserPreferences struct {
-	Tone     string `json:"tone,omitempty"`
-	Detail   string `json:"detail,omitempty"`
-	Language string `json:"language,omitempty"`
-}
-
-type MuEdChatContext struct {
-	Course     map[string]any `json:"course,omitempty"`
-	Task       map[string]any `json:"task,omitempty"`
-	Submission map[string]any `json:"submission,omitempty"`
-}
-
-type MuEdChatLLMConfig struct {
-	Model       string         `json:"model,omitempty"`
-	Temperature *float64       `json:"temperature,omitempty"`
-	MaxTokens   *int           `json:"maxTokens,omitempty"`
-	Extra       map[string]any `json:"extra,omitempty"`
-}
-
-type MuEdChatDataPolicy struct {
-	RetainData  bool `json:"retainData"`
-	AllowReview bool `json:"allowReview"`
-}
-
-type MuEdChatConfiguration struct {
-	LLM        *MuEdChatLLMConfig  `json:"llm,omitempty"`
-	DataPolicy *MuEdChatDataPolicy `json:"dataPolicy,omitempty"`
-}
-
+// MuEdChatRequest is the request body for the chat endpoint. Only messages
+// and conversationId have a fixed shape per the µEd spec — user, context,
+// and configuration are all declared additionalProperties/freeform (or, for
+// user, nested under a User schema that isn't worth flattening here), and
+// are never inspected by shimmy itself; they only flow straight through to
+// the worker. Typing them narrowly risks silently dropping fields that don't
+// match a hand-picked sub-schema, so they stay as map[string]any, matching
+// the convention used for task-specific data in evaluate.go (e.g.
+// MuEdSubmission.Content, MuEdTask.ReferenceSolution).
 type MuEdChatRequest struct {
-	Messages       []MuEdChatMessage        `json:"messages"`
-	ConversationID string                   `json:"conversationId,omitempty"`
-	User           *MuEdChatUserPreferences `json:"user,omitempty"`
-	Context        *MuEdChatContext         `json:"context,omitempty"`
-	Configuration  *MuEdChatConfiguration   `json:"configuration,omitempty"`
-}
-
-type MuEdChatResponseMetadata struct {
-	Tokens map[string]any `json:"tokens,omitempty"`
-	Model  string         `json:"model,omitempty"`
-	Timing map[string]any `json:"timing,omitempty"`
-}
-
-type MuEdChatResponse struct {
-	Output   MuEdChatMessage           `json:"output"`
-	Metadata *MuEdChatResponseMetadata `json:"metadata,omitempty"`
+	Messages       []MuEdChatMessage `json:"messages"`
+	ConversationID string            `json:"conversationId,omitempty"`
+	User           map[string]any    `json:"user,omitempty"`
+	Context        map[string]any    `json:"context,omitempty"`
+	Configuration  map[string]any    `json:"configuration,omitempty"`
 }
 
 type MuEdChatHealthStatus string
@@ -83,21 +53,6 @@ const (
 	MuEdChatHealthStatusDegraded    MuEdChatHealthStatus = "DEGRADED"
 	MuEdChatHealthStatusUnavailable MuEdChatHealthStatus = "UNAVAILABLE"
 )
-
-type MuEdChatCapabilities struct {
-	Chat            bool `json:"chat"`
-	UserPreferences bool `json:"userPreferences"`
-	Streaming       bool `json:"streaming"`
-	DataPolicy      bool `json:"dataPolicy"`
-}
-
-type MuEdChatHealthResponse struct {
-	Status               MuEdChatHealthStatus `json:"status"`
-	Capabilities         MuEdChatCapabilities `json:"capabilities"`
-	SupportedLanguages   []string             `json:"supportedLanguages"`
-	SupportedModels      []string             `json:"supportedModels"`
-	SupportedAPIVersions []string             `json:"supportedAPIVersions"`
-}
 
 // MuEdBuildChatRequest converts a MuEdChatRequest to the map sent to the worker.
 func MuEdBuildChatRequest(req MuEdChatRequest) (map[string]any, error) {
@@ -115,42 +70,72 @@ func MuEdBuildChatRequest(req MuEdChatRequest) (map[string]any, error) {
 	return m, nil
 }
 
-// MuEdToChatResponse transforms a worker result map into a MuEdChatResponse.
-func MuEdToChatResponse(result map[string]any) (*MuEdChatResponse, error) {
-	b, err := json.Marshal(result)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal chat result: %w", err)
+// MuEdToChatResponse transforms a worker result map into a µEd chat response map.
+func MuEdToChatResponse(result map[string]any) (map[string]any, error) {
+	output, ok := result["output"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("chat response missing output")
 	}
-	var resp MuEdChatResponse
-	if err := json.Unmarshal(b, &resp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal chat response: %w", err)
-	}
-	if resp.Output.Role == "" {
+
+	role, _ := output["role"].(string)
+	if role == "" {
 		return nil, fmt.Errorf("chat response missing output role")
 	}
-	if resp.Output.Content == "" {
+
+	content, _ := output["content"].(string)
+	if content == "" {
 		return nil, fmt.Errorf("chat response missing output content")
 	}
-	return &resp, nil
+
+	resp := map[string]any{
+		"output": map[string]any{
+			"role":    role,
+			"content": content,
+		},
+	}
+	if metadata, ok := result["metadata"].(map[string]any); ok {
+		resp["metadata"] = metadata
+	}
+	return resp, nil
 }
 
-// MuEdToChatHealthResponse transforms a worker result map into a MuEdChatHealthResponse.
-// nil slices are normalised to empty slices so they serialise as [] not null.
-func MuEdToChatHealthResponse(result map[string]any) MuEdChatHealthResponse {
-	b, _ := json.Marshal(result)
-	var resp MuEdChatHealthResponse
-	json.Unmarshal(b, &resp) //nolint:errcheck
-	if resp.Status == "" {
-		resp.Status = MuEdChatHealthStatusOK
+// MuEdToChatHealthResponse transforms a worker result map into a µEd chat
+// health response map. Unlike evaluate's health capabilities (which shimmy
+// hardcodes itself), a chat worker is authoritative on what it supports, so
+// this passes the worker's capabilities through largely as-is — it only
+// fills in the spec's required keys/defaults and normalises nil slices to
+// empty ones so they serialise as [] not null.
+func MuEdToChatHealthResponse(result map[string]any) map[string]any {
+	status, _ := result["status"].(string)
+	if status == "" {
+		status = string(MuEdChatHealthStatusOK)
 	}
-	if resp.SupportedLanguages == nil {
-		resp.SupportedLanguages = []string{}
+
+	capabilities, ok := result["capabilities"].(map[string]any)
+	if !ok {
+		capabilities = map[string]any{}
 	}
-	if resp.SupportedModels == nil {
-		resp.SupportedModels = []string{}
+	if _, ok := capabilities["supportsChat"]; !ok {
+		capabilities["supportsChat"] = false
 	}
-	if resp.SupportedAPIVersions == nil {
-		resp.SupportedAPIVersions = []string{}
+	if _, ok := capabilities["supportsDataPolicy"]; !ok {
+		capabilities["supportsDataPolicy"] = "NOT_SUPPORTED"
+	}
+	for _, key := range []string{"supportedLanguages", "supportedModels", "supportedAPIVersions"} {
+		if capabilities[key] == nil {
+			capabilities[key] = []string{}
+		}
+	}
+
+	resp := map[string]any{
+		"status":       status,
+		"capabilities": capabilities,
+	}
+	if msg, ok := result["statusMessage"].(string); ok {
+		resp["statusMessage"] = msg
+	}
+	if version, ok := result["version"].(string); ok {
+		resp["version"] = version
 	}
 	return resp
 }

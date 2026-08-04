@@ -68,6 +68,75 @@ func TestMuEdBuildChatRequest_ConversationIDIncluded(t *testing.T) {
 	assert.Equal(t, "abc-123", body["conversationId"])
 }
 
+// TestMuEdBuildChatRequest_UserPassedThroughIntact is a regression test: the
+// User field used to be typed as a flat {tone, detail, language} struct that
+// didn't match the spec's nested User{type, preference{tone,detail,language},
+// taskProgress} shape, silently discarding everything but the mislabeled
+// fields. It must now round-trip untouched, since shimmy never inspects it.
+func TestMuEdBuildChatRequest_UserPassedThroughIntact(t *testing.T) {
+	user := map[string]any{
+		"type": "LEARNER",
+		"preference": map[string]any{
+			"tone":                "FORMAL",
+			"conversationalStyle": "socratic",
+		},
+		"taskProgress": map[string]any{
+			"timeSpentOnQuestion": "30 minutes",
+		},
+	}
+	req := runtime.MuEdChatRequest{
+		Messages: []runtime.MuEdChatMessage{{Role: runtime.MuEdChatRoleUser, Content: "hi"}},
+		User:     user,
+	}
+	body, err := runtime.MuEdBuildChatRequest(req)
+	require.NoError(t, err)
+
+	gotUser, ok := body["user"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "LEARNER", gotUser["type"])
+	preference, ok := gotUser["preference"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "FORMAL", preference["tone"])
+	assert.Equal(t, "socratic", preference["conversationalStyle"])
+	taskProgress, ok := gotUser["taskProgress"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "30 minutes", taskProgress["timeSpentOnQuestion"])
+}
+
+// TestMuEdBuildChatRequest_ContextPassedThroughIntact is a regression test:
+// the Context field used to be typed as {course, task, submission}, which
+// doesn't match the spec's fully freeform "additionalProperties: true"
+// context object. A real caller's context shape (e.g. {set, question,
+// summary}) must survive the round trip untouched.
+func TestMuEdBuildChatRequest_ContextPassedThroughIntact(t *testing.T) {
+	context := map[string]any{
+		"summary": "prior conversation summary",
+		"set": map[string]any{
+			"title":  "Fundamentals",
+			"number": float64(2),
+		},
+		"question": map[string]any{
+			"title": "Understanding Polymorphism",
+		},
+	}
+	req := runtime.MuEdChatRequest{
+		Messages: []runtime.MuEdChatMessage{{Role: runtime.MuEdChatRoleUser, Content: "hi"}},
+		Context:  context,
+	}
+	body, err := runtime.MuEdBuildChatRequest(req)
+	require.NoError(t, err)
+
+	gotContext, ok := body["context"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "prior conversation summary", gotContext["summary"])
+	set, ok := gotContext["set"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Fundamentals", set["title"])
+	question, ok := gotContext["question"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Understanding Polymorphism", question["title"])
+}
+
 // --- MuEdToChatResponse ---
 
 func TestMuEdToChatResponse_Valid(t *testing.T) {
@@ -79,9 +148,16 @@ func TestMuEdToChatResponse_Valid(t *testing.T) {
 	}
 	resp, err := runtime.MuEdToChatResponse(result)
 	require.NoError(t, err)
-	assert.Equal(t, runtime.MuEdChatRoleAssistant, resp.Output.Role)
-	assert.Equal(t, "Hello there!", resp.Output.Content)
-	assert.Nil(t, resp.Metadata)
+	output, ok := resp["output"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "ASSISTANT", output["role"])
+	assert.Equal(t, "Hello there!", output["content"])
+	assert.NotContains(t, resp, "metadata")
+}
+
+func TestMuEdToChatResponse_MissingOutput(t *testing.T) {
+	_, err := runtime.MuEdToChatResponse(map[string]any{})
+	require.Error(t, err)
 }
 
 func TestMuEdToChatResponse_MissingRole(t *testing.T) {
@@ -116,8 +192,9 @@ func TestMuEdToChatResponse_MetadataForwarded(t *testing.T) {
 	}
 	resp, err := runtime.MuEdToChatResponse(result)
 	require.NoError(t, err)
-	require.NotNil(t, resp.Metadata)
-	assert.Equal(t, "gpt-4", resp.Metadata.Model)
+	metadata, ok := resp["metadata"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "gpt-4", metadata["model"])
 }
 
 // --- MuEdToChatHealthResponse ---
@@ -126,23 +203,64 @@ func TestMuEdToChatHealthResponse_Valid(t *testing.T) {
 	result := map[string]any{
 		"status": "DEGRADED",
 		"capabilities": map[string]any{
-			"chat": true,
+			"supportsChat": true,
 		},
-		"supportedLanguages":   []any{"en"},
-		"supportedModels":      []any{"gpt-4"},
-		"supportedAPIVersions": []any{"1.0"},
+		"statusMessage": "partially degraded",
+		"version":       "1.2.3",
 	}
 	resp := runtime.MuEdToChatHealthResponse(result)
-	assert.Equal(t, runtime.MuEdChatHealthStatusDegraded, resp.Status)
-	assert.True(t, resp.Capabilities.Chat)
-	assert.Equal(t, []string{"en"}, resp.SupportedLanguages)
-	assert.Equal(t, []string{"gpt-4"}, resp.SupportedModels)
-	assert.Equal(t, []string{"1.0"}, resp.SupportedAPIVersions)
+	assert.Equal(t, "DEGRADED", resp["status"])
+	assert.Equal(t, "partially degraded", resp["statusMessage"])
+	assert.Equal(t, "1.2.3", resp["version"])
+
+	capabilities, ok := resp["capabilities"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, capabilities["supportsChat"])
+	// Defaults filled in for required-but-unset spec keys.
+	assert.Equal(t, "NOT_SUPPORTED", capabilities["supportsDataPolicy"])
+	assert.Equal(t, []string{}, capabilities["supportedLanguages"])
+	assert.Equal(t, []string{}, capabilities["supportedModels"])
+	assert.Equal(t, []string{}, capabilities["supportedAPIVersions"])
+}
+
+func TestMuEdToChatHealthResponse_CapabilitiesPassedThroughIntact(t *testing.T) {
+	// The worker is authoritative on its own capabilities (unlike evaluate,
+	// which hardcodes them) — arbitrary worker-supplied keys must survive.
+	result := map[string]any{
+		"status": "OK",
+		"capabilities": map[string]any{
+			"supportsChat":            true,
+			"supportsUserPreferences": true,
+			"supportsStreaming":       false,
+			"supportsDataPolicy":      "PARTIAL",
+			"supportedLanguages":      []any{"en", "de"},
+			"supportedModels":         []any{"gpt-4o"},
+			"supportedAPIVersions":    []any{"0.1.0"},
+		},
+	}
+	resp := runtime.MuEdToChatHealthResponse(result)
+	capabilities, ok := resp["capabilities"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, capabilities["supportsChat"])
+	assert.Equal(t, true, capabilities["supportsUserPreferences"])
+	assert.Equal(t, false, capabilities["supportsStreaming"])
+	assert.Equal(t, "PARTIAL", capabilities["supportsDataPolicy"])
+	assert.Equal(t, []any{"en", "de"}, capabilities["supportedLanguages"])
+	assert.Equal(t, []any{"gpt-4o"}, capabilities["supportedModels"])
+	assert.Equal(t, []any{"0.1.0"}, capabilities["supportedAPIVersions"])
 }
 
 func TestMuEdToChatHealthResponse_DefaultsStatusOK(t *testing.T) {
 	resp := runtime.MuEdToChatHealthResponse(map[string]any{})
-	assert.Equal(t, runtime.MuEdChatHealthStatusOK, resp.Status)
+	assert.Equal(t, "OK", resp["status"])
+}
+
+func TestMuEdToChatHealthResponse_DefaultsMissingCapabilities(t *testing.T) {
+	resp := runtime.MuEdToChatHealthResponse(map[string]any{})
+	capabilities, ok := resp["capabilities"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, false, capabilities["supportsChat"])
+	assert.Equal(t, "NOT_SUPPORTED", capabilities["supportsDataPolicy"])
 }
 
 func TestMuEdToChatHealthResponse_NilSlicesDefaultToEmpty(t *testing.T) {
@@ -153,7 +271,9 @@ func TestMuEdToChatHealthResponse_NilSlicesDefaultToEmpty(t *testing.T) {
 
 	var out map[string]any
 	require.NoError(t, json.Unmarshal(raw, &out))
-	assert.Equal(t, []any{}, out["supportedLanguages"])
-	assert.Equal(t, []any{}, out["supportedModels"])
-	assert.Equal(t, []any{}, out["supportedAPIVersions"])
+	capabilities, ok := out["capabilities"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, []any{}, capabilities["supportedLanguages"])
+	assert.Equal(t, []any{}, capabilities["supportedModels"])
+	assert.Equal(t, []any{}, capabilities["supportedAPIVersions"])
 }

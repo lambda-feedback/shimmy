@@ -139,7 +139,7 @@ func TestServeChatHealth_Success(t *testing.T) {
 			"command": "chat/health",
 			"result": map[string]any{
 				"status":               "OK",
-				"capabilities":         map[string]any{"chat": true},
+				"capabilities":         map[string]any{"supportsChat": true},
 				"supportedLanguages":   []any{},
 				"supportedModels":      []any{},
 				"supportedAPIVersions": []any{},
@@ -287,7 +287,7 @@ func TestServeChatHealth_AbsentVersionHeader(t *testing.T) {
 			"command": "chat/health",
 			"result": map[string]any{
 				"status":               "OK",
-				"capabilities":         map[string]any{"chat": true},
+				"capabilities":         map[string]any{"supportsChat": true},
 				"supportedLanguages":   []any{},
 				"supportedModels":      []any{},
 				"supportedAPIVersions": []any{},
