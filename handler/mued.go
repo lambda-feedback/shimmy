@@ -16,13 +16,10 @@ import (
 
 const muEdVersionHeader = "X-Api-Version"
 
-// Progress-reporting headers. Deliberately distinct from the callbackUrl/
-// X-Request-Id pair documented (but not yet implemented) in the µEd schema
-// for a different, unrelated feature (async whole-result delivery).
-const (
-	progressCallbackURLHeader   = "X-Progress-Callback-Url"
-	progressCorrelationIDHeader = "X-Progress-Correlation-Id"
-)
+// muEdRequestIDHeader is the µEd spec's request-tracing header (see
+// https://mued.org/spec, X-Request-Id parameter). Progress events reuse it
+// as their correlation key, echoing back whatever the caller supplied.
+const muEdRequestIDHeader = "X-Request-Id"
 
 type MuEdHandlerParams struct {
 	fx.In
@@ -169,13 +166,15 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		Header: header,
 	}
 
+	var callbackURL string
+	if muEdReq.CallbackUrl != nil {
+		callbackURL = *muEdReq.CallbackUrl
+	}
+
 	ctx := r.Context()
-	reporter, err := h.progressFactory.NewReporter(
-		r.Header.Get(progressCallbackURLHeader),
-		r.Header.Get(progressCorrelationIDHeader),
-	)
+	reporter, err := h.progressFactory.NewReporter(callbackURL, r.Header.Get(muEdRequestIDHeader))
 	if err != nil {
-		h.log.Warn("invalid progress callback header, disabling progress reporting", zap.Error(err))
+		h.log.Warn("invalid callbackUrl, disabling progress reporting", zap.Error(err))
 	} else if reporter != nil {
 		ctx = progress.ContextWithReporter(ctx, reporter)
 	}
@@ -219,10 +218,16 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		feedback = runtime.MuEdToEvaluateFeedback(result)
 	}
 
+	// Carry the feedback itself on the completed event so that, when a
+	// caller supplies callbackUrl, that callback genuinely fulfils the
+	// µEd spec's "deliver feedback results to this URL" wording — even
+	// though shimmy always takes the synchronous 200 path rather than
+	// the spec's 202-Accepted deferred-delivery flow.
 	progress.Emit(ctx, progress.Event{
 		Stage:   progress.StageCompleted,
 		Command: string(command),
 		Message: "Feedback is ready.",
+		Data:    map[string]any{"feedback": feedback},
 	})
 
 	w.Header().Set("Content-Type", "application/json")

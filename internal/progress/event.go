@@ -49,8 +49,11 @@ type Event struct {
 	// students or teachers directly; show Message instead.
 	Error string
 
-	// Data is a free-form extension point, reserved for future events
-	// (e.g. ones emitted by the evaluation function process itself).
+	// Data is a free-form extension point. On StageCompleted it carries
+	// the evaluation's feedback payload (so a callbackUrl-supplying
+	// caller gets the final result, not just a status ping). Otherwise
+	// it's reserved for future events, e.g. ones emitted by the
+	// evaluation function process itself.
 	Data map[string]any
 
 	// Timestamp is set by Emit, not by callers.

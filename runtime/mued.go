@@ -34,6 +34,16 @@ type MuEdEvaluateRequest struct {
 	Task                  *MuEdTask                  `json:"task"`
 	Configuration         *MuEdConfiguration         `json:"configuration"`
 	PreSubmissionFeedback *MuEdPreSubmissionFeedback `json:"preSubmissionFeedback"`
+
+	// CallbackUrl is the µEd spec's optional HTTPS callback URL (see
+	// https://mued.org/spec, EvaluateRequest.callbackUrl). The spec
+	// describes it for asynchronous final-result delivery (the service
+	// may return 202 Accepted and POST the result here later); shimmy
+	// doesn't implement that 202 flow, but reuses this same field as the
+	// target for progress events, since both describe "send updates
+	// about this request to this URL" and a caller shouldn't need a
+	// shimmy-specific header for something the spec already defines.
+	CallbackUrl *string `json:"callbackUrl"`
 }
 
 var SupportedMuEdVersions = []string{"0.1.0"}
