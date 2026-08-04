@@ -18,7 +18,7 @@ type MuEdSubmission struct {
 }
 
 type MuEdTask struct {
-	ReferenceSolution *MuEdSubmission `json:"referenceSolution"`
+	ReferenceSolution map[string]any `json:"referenceSolution"`
 }
 
 type MuEdConfiguration struct {
@@ -101,8 +101,7 @@ func MuEdBuildLegacyEvaluateRequest(req MuEdEvaluateRequest) (map[string]any, er
 		return nil, fmt.Errorf("task.referenceSolution is required for evaluation")
 	}
 
-	sol := req.Task.ReferenceSolution
-	answer, err := muEdExtractContent(sol.Content, sol.Type)
+	answer, err := muEdExtractContent(req.Task.ReferenceSolution, req.Submission.Type)
 	if err != nil {
 		return nil, fmt.Errorf("referenceSolution: %w", err)
 	}
@@ -173,7 +172,11 @@ func MuEdToEvaluateFeedback(result map[string]any) []map[string]any {
 }
 
 // MuEdToPreviewFeedback wraps a legacy preview result as [{"preSubmissionFeedback": result}].
+// Unwraps the nested "preview" key produced by legacy preview functions before wrapping.
 func MuEdToPreviewFeedback(result map[string]any) []map[string]any {
+	if inner, ok := result["preview"].(map[string]any); ok {
+		result = inner
+	}
 	return []map[string]any{
 		{"preSubmissionFeedback": result},
 	}
