@@ -1,6 +1,10 @@
 package config
 
-import "github.com/lambda-feedback/shimmy/runtime"
+import (
+	"time"
+
+	"github.com/lambda-feedback/shimmy/runtime"
+)
 
 type MessageEncoding string
 
@@ -25,4 +29,7 @@ type Config struct {
 
 	// Auth is the authentication configuration
 	Auth AuthConfig `conf:"auth"`
+
+	// StartTimeout is the duration to wait for the application to start.
+	StartTimeout time.Duration `conf:"start_timeout"`
 }
