@@ -290,7 +290,7 @@ func TestMuEdServeHealth_Success(t *testing.T) {
 	healthResult := map[string]any{"tests_passed": true, "successes": []any{}, "failures": []any{}, "errors": []any{}}
 	mockRuntime := new(MockRuntime)
 	mockRuntime.On("Handle", mock.Anything, runtime.EvaluationRequest{
-		Command: runtime.CommandHealth,
+		Command: runtime.CommandEvaluateHealth,
 		Data:    map[string]any{},
 	}).Return(runtime.EvaluationResponse{
 		"command": "healthcheck",
@@ -375,7 +375,7 @@ func TestMuEdServeHealth_DegradedStatus(t *testing.T) {
 	healthResult := map[string]any{"tests_passed": false, "successes": []any{}, "failures": []any{"f1"}, "errors": []any{}}
 	mockRuntime := new(MockRuntime)
 	mockRuntime.On("Handle", mock.Anything, runtime.EvaluationRequest{
-		Command: runtime.CommandHealth,
+		Command: runtime.CommandEvaluateHealth,
 		Data:    map[string]any{},
 	}).Return(runtime.EvaluationResponse{
 		"command": "healthcheck",
@@ -466,7 +466,7 @@ func TestMuEdServeHealth_AbsentVersionHeader(t *testing.T) {
 	healthResult := map[string]any{"tests_passed": true, "successes": []any{}, "failures": []any{}, "errors": []any{}}
 	mockRuntime := new(MockRuntime)
 	mockRuntime.On("Handle", mock.Anything, runtime.EvaluationRequest{
-		Command: runtime.CommandHealth,
+		Command: runtime.CommandEvaluateHealth,
 		Data:    map[string]any{},
 	}).Return(runtime.EvaluationResponse{
 		"command": "healthcheck",

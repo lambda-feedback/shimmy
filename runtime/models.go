@@ -14,8 +14,8 @@ const (
 	// CommandEvaluate is the command to evaluate the response.
 	CommandEvaluate Command = "eval"
 
-	// CommandHealth is the command for healthcheck
-	CommandHealth = "healthcheck"
+	// CommandEvaluateHealth is the command for healthcheck
+	CommandEvaluateHealth = "healthcheck"
 
 	// CommandChat is the command for chat.
 	CommandChat Command = "chat"
@@ -32,7 +32,7 @@ func ParseCommand(path string) (Command, bool) {
 	case "preview":
 		return CommandPreview, true
 	case "healthcheck":
-		return CommandHealth, true
+		return CommandEvaluateHealth, true
 	case "chat":
 		return CommandChat, true
 	case "chat/health":

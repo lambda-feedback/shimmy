@@ -47,7 +47,6 @@ func writeJSONError(w http.ResponseWriter, msg string, status int) {
 	json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": msg}}) //nolint:errcheck
 }
 
-
 // checkMuEdVersion validates the X-Api-Version request header.
 // Returns (resolvedVersion, true) on success, or writes a 406 and returns ("", false).
 func (h *MuEdHandler) checkMuEdVersion(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -87,7 +86,6 @@ func (h *MuEdHandler) writeMuEdError(w http.ResponseWriter, version string, stat
 	w.WriteHeader(statusCode)
 	w.Write(body) //nolint:errcheck
 }
-
 
 func (h *MuEdHandler) checkAuth(w http.ResponseWriter, r *http.Request) bool {
 	if h.config.Auth.Key != "" && r.Header.Get("api-key") != h.config.Auth.Key {
@@ -216,7 +214,7 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.runtime.Handle(r.Context(), runtime.EvaluationRequest{
-		Command: runtime.CommandHealth,
+		Command: runtime.CommandEvaluateHealth,
 		Data:    map[string]any{},
 	})
 	if err != nil {
