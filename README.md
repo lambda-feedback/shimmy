@@ -63,7 +63,9 @@ GLOBAL OPTIONS:
    --progress-allow-private-networks          allow progress callback delivery to loopback, link-local, and private IP addresses. Leave disabled unless the callback target is known to live on a trusted private network. (default: false) [$PROGRESS_ALLOW_PRIVATE_NETWORKS]
    --progress-sidecar-max-body-bytes value     the maximum size, in bytes, of a single worker-authored progress event POST. (default: 16384) [$PROGRESS_SIDECAR_MAX_BODY_BYTES]
    --progress-sidecar-max-events value         the maximum number of worker-authored progress events relayed per evaluation. (default: 50) [$PROGRESS_SIDECAR_MAX_EVENTS]
-   --progress-sidecar-min-event-interval value  the minimum spacing between worker-authored progress events relayed per evaluation. (default: 200ms) [$PROGRESS_SIDECAR_MIN_EVENT_INTERVAL]
+   --progress-sidecar-burst-size value          how many worker-authored progress events at the start of an evaluation are exempt from the minimum spacing below, so a handful of legitimate back-to-back checkpoints aren't rate limited. (default: 5) [$PROGRESS_SIDECAR_BURST_SIZE]
+   --progress-sidecar-min-event-interval value  the minimum spacing between worker-authored progress events relayed per evaluation, once the burst allowance above is used up. (default: 10ms) [$PROGRESS_SIDECAR_MIN_EVENT_INTERVAL]
+   --progress-sidecar-unbind-grace-period value  how long to keep relaying worker-authored progress events after a request returns, so a fire-and-forget POST dispatched just before the result can still land. (default: 250ms) [$PROGRESS_SIDECAR_UNBIND_GRACE_PERIOD]
 
    function
 
@@ -282,7 +284,7 @@ To emit a custom event, `POST` a small JSON body to `EVAL_PROGRESS_URL`:
 - `data` (object, optional): free-form, passed through as-is.
 - There is no `stage` field, by design: an evaluation function can never claim `preparing`, `evaluating`, `completed`, or `failed` — those remain exclusively shim-authored. Custom events are always delivered with `"stage": "progress"`.
 
-The response status is informational only — the evaluation function should treat every response as fire-and-forget and never fail on a non-2xx status. Delivery is best-effort, same as outbound callback delivery: `202` accepted (delivery to `callbackUrl` is then attempted in the background), `400` malformed body or empty `message`, `413` body too large, `429` rate limited, `503` no request currently associated with the listener (e.g. a stray POST after the request has already finished).
+The response status is informational only — the evaluation function should treat every response as fire-and-forget and never fail on a non-2xx status. Delivery is best-effort, same as outbound callback delivery: `202` accepted (delivery to `callbackUrl` is then attempted in the background), `400` malformed body or empty `message`, `413` body too large, `429` rate limited, `503` no request currently associated with the listener (e.g. a stray POST arriving after both the request has finished and the grace period below has elapsed).
 
 To bound how much an evaluation function (which may be running untrusted, sandboxed code) can push through this channel, events are capped before relay:
 
@@ -290,7 +292,9 @@ To bound how much an evaluation function (which may be running untrusted, sandbo
 |------|---------|---------|-------------|
 | `--progress-sidecar-max-body-bytes` | `PROGRESS_SIDECAR_MAX_BODY_BYTES` | `16384` | Maximum size, in bytes, of a single event POST. |
 | `--progress-sidecar-max-events` | `PROGRESS_SIDECAR_MAX_EVENTS` | `50` | Maximum number of events relayed per evaluation. |
-| `--progress-sidecar-min-event-interval` | `PROGRESS_SIDECAR_MIN_EVENT_INTERVAL` | `200ms` | Minimum spacing between relayed events. |
+| `--progress-sidecar-burst-size` | `PROGRESS_SIDECAR_BURST_SIZE` | `5` | Events at the start of a span exempt from the minimum spacing below, so a handful of legitimate back-to-back checkpoints aren't rate limited. |
+| `--progress-sidecar-min-event-interval` | `PROGRESS_SIDECAR_MIN_EVENT_INTERVAL` | `10ms` | Minimum spacing between relayed events, once the burst allowance is used up. |
+| `--progress-sidecar-unbind-grace-period` | `PROGRESS_SIDECAR_UNBIND_GRACE_PERIOD` | `250ms` | How long the listener keeps relaying after a request returns, so a fire-and-forget event POST dispatched by the worker just before returning its result still has a window to land. |
 
 > **Sandboxing note:** under `--sandbox` alone, the worker keeps the host network namespace and can reach the loopback listener normally. Only the separate, explicit `--sandbox-disable-network` flag isolates networking (and loopback specifically) — under that flag, custom progress events are silently dropped, the same as any other best-effort delivery failure.
 

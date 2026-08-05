@@ -17,7 +17,8 @@ import (
 const (
 	defaultSidecarMaxBodyBytes      int64 = 16 * 1024
 	defaultSidecarMaxEventsPerSpan        = 50
-	defaultSidecarMinEventInterval        = 200 * time.Millisecond
+	defaultSidecarBurstSize               = 5
+	defaultSidecarMinEventInterval        = 10 * time.Millisecond
 	defaultSidecarUnbindGracePeriod       = 250 * time.Millisecond
 )
 
@@ -35,8 +36,20 @@ type SidecarConfig struct {
 	// If unset (<= 0), defaultSidecarMaxEventsPerSpan is used.
 	MaxEventsPerSpan int `conf:"max_events_per_span"`
 
+	// BurstSize is how many events at the start of a span are exempt from
+	// MinEventInterval spacing, so a handful of legitimate back-to-back
+	// checkpoints (e.g. a fast evaluation reporting progress at several
+	// points microseconds to a few ms apart) aren't rate-limited just
+	// because they arrive faster than any fixed spacing could accommodate.
+	// MinEventInterval spacing only applies once the burst is used up.
+	// Still bounded by MaxEventsPerSpan. If unset (== 0),
+	// defaultSidecarBurstSize is used; a negative value explicitly
+	// disables the burst allowance (spacing applies from the first event).
+	BurstSize int `conf:"burst_size"`
+
 	// MinEventInterval enforces a minimum spacing between accepted events
-	// within a span. If unset (<= 0), defaultSidecarMinEventInterval is used.
+	// once a span's BurstSize allowance is used up. If unset (<= 0),
+	// defaultSidecarMinEventInterval is used.
 	MinEventInterval time.Duration `conf:"min_event_interval"`
 
 	// UnbindGracePeriod delays detaching the bound reporter after a span
@@ -54,6 +67,11 @@ func (c SidecarConfig) withDefaults() SidecarConfig {
 	}
 	if c.MaxEventsPerSpan <= 0 {
 		c.MaxEventsPerSpan = defaultSidecarMaxEventsPerSpan
+	}
+	if c.BurstSize < 0 {
+		c.BurstSize = 0
+	} else if c.BurstSize == 0 {
+		c.BurstSize = defaultSidecarBurstSize
 	}
 	if c.MinEventInterval <= 0 {
 		c.MinEventInterval = defaultSidecarMinEventInterval
@@ -264,7 +282,7 @@ func (s *Sidecar) accept() (command string, reporter Reporter, status int) {
 	if s.count >= s.cfg.MaxEventsPerSpan {
 		return "", nil, http.StatusTooManyRequests
 	}
-	if !s.lastSent.IsZero() && now.Sub(s.lastSent) < s.cfg.MinEventInterval {
+	if s.count >= s.cfg.BurstSize && !s.lastSent.IsZero() && now.Sub(s.lastSent) < s.cfg.MinEventInterval {
 		return "", nil, http.StatusTooManyRequests
 	}
 

@@ -174,8 +174,8 @@ func TestStdioAdapter_Start_InjectsProgressURL(t *testing.T) {
 }
 
 // TestStdioAdapter_Send_RelaysWorkerProgressEvents exercises the same
-// Bind/Unbind path Send uses around the (separately, more fully) tested
-// Sidecar, without needing a live RPC round trip - Send itself isn't
+// Bind/UnbindAfterGrace path Send uses around the (separately, more fully)
+// tested Sidecar, without needing a live RPC round trip - Send itself isn't
 // otherwise exercised in this file (see the disabled tests below).
 func TestStdioAdapter_Send_RelaysWorkerProgressEvents(t *testing.T) {
 	a, w := createRpcAdapter(t)
@@ -191,7 +191,7 @@ func TestStdioAdapter_Send_RelaysWorkerProgressEvents(t *testing.T) {
 
 	// mirrors exactly what rpcAdapter.Send does with a.sidecar
 	a.sidecar.Bind("eval", progress.FromContext(ctx))
-	defer a.sidecar.Unbind()
+	defer a.sidecar.UnbindAfterGrace()
 
 	resp, err := http.Post(a.sidecar.URL(), "application/json", strings.NewReader(`{"message":"checking correctness"}`))
 	assert.NoError(t, err)

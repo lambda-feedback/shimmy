@@ -139,7 +139,9 @@ func TestSidecar_RateLimit_MaxEventsPerSpan(t *testing.T) {
 }
 
 func TestSidecar_RateLimit_MinEventInterval(t *testing.T) {
-	s := newTestSidecar(t, SidecarConfig{MaxEventsPerSpan: 100, MinEventInterval: time.Hour})
+	// BurstSize disabled so the very first event is already subject to
+	// interval spacing, isolating what this test exercises.
+	s := newTestSidecar(t, SidecarConfig{MaxEventsPerSpan: 100, BurstSize: -1, MinEventInterval: time.Hour})
 	r := &recordingReporter{}
 	s.Bind("eval", r)
 
@@ -151,6 +153,41 @@ func TestSidecar_RateLimit_MinEventInterval(t *testing.T) {
 	second := postSidecar(t, s, `{"message":"two"}`)
 	if second.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("expected second event rate limited (429) by min interval, got %d", second.StatusCode)
+	}
+}
+
+func TestSidecar_Burst_AllowsCloselySpacedEventsWithinBurst(t *testing.T) {
+	// A large MinEventInterval would reject any second event immediately -
+	// unless it falls within the burst allowance, which is what this
+	// exercises: events 2 and 3 land inside BurstSize and must be accepted
+	// even though far less than MinEventInterval separates them.
+	s := newTestSidecar(t, SidecarConfig{MaxEventsPerSpan: 100, BurstSize: 3, MinEventInterval: time.Hour})
+	r := &recordingReporter{}
+	s.Bind("eval", r)
+
+	for i, msg := range []string{"one", "two", "three"} {
+		resp := postSidecar(t, s, `{"message":"`+msg+`"}`)
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("expected burst event %d accepted (202), got %d", i+1, resp.StatusCode)
+		}
+	}
+}
+
+func TestSidecar_Burst_ThenEnforcesMinEventInterval(t *testing.T) {
+	s := newTestSidecar(t, SidecarConfig{MaxEventsPerSpan: 100, BurstSize: 2, MinEventInterval: time.Hour})
+	r := &recordingReporter{}
+	s.Bind("eval", r)
+
+	for i, msg := range []string{"one", "two"} {
+		resp := postSidecar(t, s, `{"message":"`+msg+`"}`)
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("expected burst event %d accepted (202), got %d", i+1, resp.StatusCode)
+		}
+	}
+
+	third := postSidecar(t, s, `{"message":"three"}`)
+	if third.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected event past burst allowance rate limited (429), got %d", third.StatusCode)
 	}
 }
 
