@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	defaultSidecarMaxBodyBytes     int64 = 16 * 1024
-	defaultSidecarMaxEventsPerSpan       = 50
-	defaultSidecarMinEventInterval       = 200 * time.Millisecond
+	defaultSidecarMaxBodyBytes      int64 = 16 * 1024
+	defaultSidecarMaxEventsPerSpan        = 50
+	defaultSidecarMinEventInterval        = 200 * time.Millisecond
+	defaultSidecarUnbindGracePeriod       = 250 * time.Millisecond
 )
 
 // SidecarConfig bounds abuse of the worker-authored progress side-channel.
@@ -37,6 +38,14 @@ type SidecarConfig struct {
 	// MinEventInterval enforces a minimum spacing between accepted events
 	// within a span. If unset (<= 0), defaultSidecarMinEventInterval is used.
 	MinEventInterval time.Duration `conf:"min_event_interval"`
+
+	// UnbindGracePeriod delays detaching the bound reporter after a span
+	// ends, so a worker-authored progress POST that was already in flight
+	// (e.g. dispatched fire-and-forget just before the worker returned its
+	// result) still has a window to arrive and be relayed, instead of
+	// racing the RPC response back to shim. If unset (<= 0),
+	// defaultSidecarUnbindGracePeriod is used.
+	UnbindGracePeriod time.Duration `conf:"unbind_grace_period"`
 }
 
 func (c SidecarConfig) withDefaults() SidecarConfig {
@@ -48,6 +57,9 @@ func (c SidecarConfig) withDefaults() SidecarConfig {
 	}
 	if c.MinEventInterval <= 0 {
 		c.MinEventInterval = defaultSidecarMinEventInterval
+	}
+	if c.UnbindGracePeriod <= 0 {
+		c.UnbindGracePeriod = defaultSidecarUnbindGracePeriod
 	}
 	return c
 }
@@ -80,11 +92,12 @@ type Sidecar struct {
 	listener net.Listener
 	server   *http.Server
 
-	mu       sync.Mutex
-	command  string
-	reporter Reporter
-	count    int
-	lastSent time.Time
+	mu         sync.Mutex
+	command    string
+	reporter   Reporter
+	count      int
+	lastSent   time.Time
+	generation uint64
 }
 
 // NewSidecar starts a loopback HTTP listener on an OS-assigned port.
@@ -129,22 +142,59 @@ func (s *Sidecar) Bind(command string, reporter Reporter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.generation++
 	s.command = command
 	s.reporter = reporter
 	s.count = 0
 	s.lastSent = time.Time{}
 }
 
-// Unbind detaches the current reporter, so any subsequent POST (e.g. a
-// straggler arriving after the bound request has already returned) is
-// rejected with 503 rather than misattributed to a future, unrelated
+// Unbind detaches the current reporter immediately, so any subsequent POST
+// (e.g. a straggler arriving after the bound request has already returned)
+// is rejected with 503 rather than misattributed to a future, unrelated
 // request.
 func (s *Sidecar) Unbind() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.generation++
 	s.command = ""
 	s.reporter = nil
+}
+
+// UnbindAfterGrace schedules the detach for after cfg.UnbindGracePeriod
+// instead of doing it immediately, without blocking the caller. This gives
+// a worker-authored progress POST dispatched fire-and-forget just before
+// the RPC response reached shim a window to still arrive and be relayed,
+// rather than losing the race against Unbind and being rejected with 503.
+//
+// If a new span is Bind-ed (or explicitly Unbind-ed) before the grace
+// period elapses, this is a no-op: the generation captured at schedule time
+// will no longer match, so the stale detach never fires and never clobbers
+// the newer span.
+func (s *Sidecar) UnbindAfterGrace() {
+	s.mu.Lock()
+	gen := s.generation
+	grace := s.cfg.UnbindGracePeriod
+	s.mu.Unlock()
+
+	if grace <= 0 {
+		s.Unbind()
+		return
+	}
+
+	time.AfterFunc(grace, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		if s.generation != gen {
+			return
+		}
+
+		s.generation++
+		s.command = ""
+		s.reporter = nil
+	})
 }
 
 // Close shuts down the sidecar's listener. It does not wait for any

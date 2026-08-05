@@ -184,11 +184,14 @@ func (a *rpcAdapter) Send(
 
 	if a.sidecar != nil {
 		// sendLock in the calling supervisor guarantees only one request
-		// is ever in flight per worker; Unbind closes the narrow window
-		// between this call returning and the next one starting, so a
-		// straggling POST from the worker can't be misattributed.
+		// is ever in flight per worker; UnbindAfterGrace closes the window
+		// between this call returning and the next one starting (after a
+		// short grace period, to give a fire-and-forget progress POST the
+		// worker dispatched just before returning its result a chance to
+		// still land), so a straggling POST can't be misattributed to an
+		// unrelated future request.
 		a.sidecar.Bind(method, progress.FromContext(ctx))
-		defer a.sidecar.Unbind()
+		defer a.sidecar.UnbindAfterGrace()
 	}
 
 	var result map[string]any
