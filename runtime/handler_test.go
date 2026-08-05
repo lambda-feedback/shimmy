@@ -31,14 +31,20 @@ func (m *mockRuntime) Handle(ctx context.Context, request runtime.EvaluationRequ
 	return args.Get(0).(runtime.EvaluationResponse), args.Error(1)
 }
 
+func (m *mockRuntime) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, error) {
+	panic("not required")
+}
+
+func (m *mockRuntime) ChatHealth(ctx context.Context) (runtime.ChatResponse, error) {
+	panic("not required")
+}
+
 func (m *mockRuntime) Start(ctx context.Context) error {
-	//Not required for tests
-	panic("Not required")
+	panic("not required")
 }
 
 func (m *mockRuntime) Shutdown(ctx context.Context) error {
-	//Not required for tests
-	panic("Not required")
+	panic("not required")
 }
 
 func setupLogger(t *testing.T) *zap.Logger {

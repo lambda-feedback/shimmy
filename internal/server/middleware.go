@@ -19,6 +19,12 @@ func NormalizePath(next http.Handler) http.Handler {
 		case strings.HasSuffix(r.URL.Path, "/evaluate"):
 			r = r.Clone(r.Context())
 			r.URL.Path = "/evaluate"
+		case strings.HasSuffix(r.URL.Path, "/chat/health"):
+			r = r.Clone(r.Context())
+			r.URL.Path = "/chat/health"
+		case strings.HasSuffix(r.URL.Path, "/chat"):
+			r = r.Clone(r.Context())
+			r.URL.Path = "/chat"
 		}
 		next.ServeHTTP(w, r)
 	})

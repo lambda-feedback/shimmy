@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/config"
+	"github.com/lambda-feedback/shimmy/internal/server"
 	"github.com/lambda-feedback/shimmy/runtime"
 )
 
@@ -213,7 +214,7 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.runtime.Handle(r.Context(), runtime.EvaluationRequest{
-		Command: runtime.CommandHealth,
+		Command: runtime.CommandEvaluateHealth,
 		Data:    map[string]any{},
 	})
 	if err != nil {
@@ -238,4 +239,12 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(muEdVersionHeader, version)
 	w.WriteHeader(statusCode)
 	json.NewEncoder(w).Encode(result) //nolint:errcheck
+}
+
+func NewMuEdEvaluateRoute(handler *MuEdHandler) server.HttpHandlerResult {
+	return server.AsHttpHandler("/evaluate", http.HandlerFunc(handler.ServeEvaluate))
+}
+
+func NewMuEdEvaluateHealthRoute(handler *MuEdHandler) server.HttpHandlerResult {
+	return server.AsHttpHandler("/evaluate/health", http.HandlerFunc(handler.ServeHealth))
 }

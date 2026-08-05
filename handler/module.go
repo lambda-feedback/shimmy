@@ -10,5 +10,7 @@ func Module() fx.Option {
 		fx.Provide(NewHealthRoute),
 		fx.Provide(NewMuEdEvaluateRoute),
 		fx.Provide(NewMuEdEvaluateHealthRoute),
+		fx.Provide(NewMuEdChatRoute),
+		fx.Provide(NewMuEdChatHealthRoute),
 	)
 }

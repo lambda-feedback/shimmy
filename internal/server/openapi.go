@@ -64,6 +64,7 @@ func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) (func(http.Handler) ht
 			// Snapshot body before validation — ValidateResponse drains the buffer.
 			bodyBytes := rec.Body.Bytes()
 
+
 			// Validate response (lenient — log only)
 			respInput := &openapi3filter.ResponseValidationInput{
 				RequestValidationInput: reqInput,
