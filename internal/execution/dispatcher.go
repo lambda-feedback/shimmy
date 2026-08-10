@@ -2,11 +2,16 @@ package execution
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
 
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution/dispatcher"
 	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
+	"github.com/lambda-feedback/shimmy/internal/execution/wasm"
 )
 
 type Dispatcher dispatcher.Dispatcher
@@ -32,7 +37,8 @@ type Params struct {
 }
 
 func NewDispatcher(params Params) (dispatcher.Dispatcher, error) {
-	if params.Config.Supervisor.IO.Interface == supervisor.RpcIO {
+	switch params.Config.Supervisor.IO.Interface {
+	case supervisor.RpcIO:
 		return dispatcher.NewDedicatedDispatcher(
 			dispatcher.DedicatedDispatcherParams{
 				Config: dispatcher.DedicatedDispatcherConfig{
@@ -42,7 +48,39 @@ func NewDispatcher(params Params) (dispatcher.Dispatcher, error) {
 				Log:     params.Log,
 			},
 		)
-	} else {
+
+	case supervisor.WasmIO:
+		wasmProfile := strings.ToLower(strings.TrimSpace(os.Getenv("FUNCTION_WASM_PROFILE")))
+		if wasmProfile == "" {
+			wasmProfile = "generic"
+		}
+
+		cfg := wasm.Config{
+			ModulePath:   params.Config.Supervisor.StartParams.Cmd,
+			MaxInstances: params.Config.MaxWorkers,
+			Timeout:      params.Config.Supervisor.SendParams.Timeout,
+		}
+		switch wasmProfile {
+		case "generic":
+			d := wasm.NewDispatcher(cfg, params.Log)
+			if err := d.Start(params.Context); err != nil {
+				return nil, err
+			}
+			return d, nil
+		case "python-reactor":
+			cfg.PythonScriptPath = os.Getenv("FUNCTION_WASM_PYTHON_SCRIPT")
+			d := wasm.NewAgentPythonDispatcher(cfg, params.Log)
+			if err := d.Start(params.Context); err != nil {
+				return nil, err
+			}
+			return d, nil
+		default:
+			validProfiles := []string{"generic", "python-reactor"}
+			sort.Strings(validProfiles)
+			return nil, fmt.Errorf("unsupported FUNCTION_WASM_PROFILE %q; supported values: %s", wasmProfile, strings.Join(validProfiles, ", "))
+		}
+
+	default:
 		return dispatcher.NewPooledDispatcher(
 			dispatcher.PooledDispatcherParams{
 				Config: dispatcher.PooledDispatcherConfig{
