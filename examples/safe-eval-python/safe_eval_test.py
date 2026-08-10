@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import pathlib
+import sys
 import unittest
 
 MODULE_PATH = pathlib.Path(__file__).with_name("safe_eval.py")
@@ -42,6 +43,16 @@ class SafeEvalTest(unittest.TestCase):
         result = invoke("print(6 * 7)", {"mode": "demo"})
         self.assertFalse(result["is_correct"])
         self.assertEqual(result["stdout"], "42\n")
+
+    def test_execute_preserves_bounded_stderr_on_runtime_error(self):
+        result = SAFE_EVAL._execute(
+            "print('diagnostic', file=sys.stderr)\nraise RuntimeError('boom')",
+            "",
+            {"sys": sys},
+            32,
+        )
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["stderr"], "diagnostic\n")
 
     def test_io_tests_use_fresh_namespaces_and_hide_hidden_values(self):
         result = invoke(

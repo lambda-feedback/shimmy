@@ -210,9 +210,17 @@ func (s *wasmSupervisor) restoreSnapshot() error {
 	}
 	if cur := mem.Size(); cur > s.snapshotSize {
 		tail := cur - s.snapshotSize
-		zeros := make([]byte, tail)
-		if !mem.Write(s.snapshotSize, zeros) {
-			return fmt.Errorf("wasm: memory grew by %d bytes; zero-fill failed: %w", tail, ErrMemoryGrew)
+		var zeros [64 * 1024]byte
+		for offset := s.snapshotSize; offset < cur; {
+			remaining := cur - offset
+			chunkSize := uint32(len(zeros))
+			if remaining < chunkSize {
+				chunkSize = remaining
+			}
+			if !mem.Write(offset, zeros[:chunkSize]) {
+				return fmt.Errorf("wasm: memory grew by %d bytes; zero-fill failed: %w", tail, ErrMemoryGrew)
+			}
+			offset += chunkSize
 		}
 		// The instance is discarded after this error, so restoring the captured
 		// prefix has no value. Returning before strategy.Restore also avoids

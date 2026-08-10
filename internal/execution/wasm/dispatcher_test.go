@@ -434,7 +434,7 @@ func TestSupervisor_Send_MemoryGrowDetected(t *testing.T) {
 	origSize := mem.Size()
 	require.Equal(t, origSize, sv.snapshotSize, "snapshotSize must be recorded at Take time")
 
-	prevPages, ok := mem.Grow(1)
+	prevPages, ok := mem.Grow(3)
 	require.True(t, ok, "memory.Grow must succeed (echo fixture has no max)")
 	require.Equal(t, origSize/(64*1024), prevPages)
 

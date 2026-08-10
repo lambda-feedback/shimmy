@@ -36,6 +36,14 @@ import (
 	"go.uber.org/zap"
 )
 
+func validateWasm32RequestLength(length uint64) error {
+	const maxWasm32ByteLength = uint64(1<<32 - 1)
+	if length > maxWasm32ByteLength {
+		return fmt.Errorf("wasm: request length %d exceeds wasm32 address space", length)
+	}
+	return nil
+}
+
 // requestEnvelope is the JSON structure written into guest memory for each
 // evaluation call.
 type requestEnvelope struct {
@@ -85,6 +93,9 @@ func (a *wasmAdapter) send(
 	}
 
 	reqLen := uint64(len(reqBytes))
+	if err := validateWasm32RequestLength(reqLen); err != nil {
+		return nil, err
+	}
 
 	// 2. Allocate guest memory for the request (cached lookup — M-4 fix).
 	if a.allocFn == nil {

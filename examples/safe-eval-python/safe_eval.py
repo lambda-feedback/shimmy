@@ -203,7 +203,7 @@ def _execute(source: str, stdin: str, inject: dict[str, Any], output_limit: int)
             "kind": "runtime",
             "error": error,
             "stdout": stdout.getvalue(),
-            "stderr": "",
+            "stderr": stderr.getvalue(),
             "truncated": stdout.truncated or stderr.truncated or traceback_truncated,
         }
     finally:
