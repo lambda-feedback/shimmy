@@ -19,10 +19,10 @@ type Config struct {
 	// .wasm file path when FUNCTION_INTERFACE=wasm).
 	ModulePath string `conf:"cmd"`
 
-	// AgentPythonManifestPath binds the clean Python reactor artifact to its
-	// producer manifest. When empty, the agent-python dispatcher reads
+	// PythonReactorManifestPath binds the clean Python reactor artifact to its
+	// producer manifest. When empty, the Python Reactor dispatcher reads
 	// manifest.json next to ModulePath. FUNCTION_WASM_MANIFEST overrides it.
-	AgentPythonManifestPath string `conf:"wasm_manifest"`
+	PythonReactorManifestPath string `conf:"wasm_manifest"`
 
 	// MaxInstances is the maximum number of concurrently active module
 	// instances. When the pool is exhausted requests block until a slot is
@@ -53,12 +53,12 @@ type Config struct {
 	// Python Reactor scripts must define dispatch(method, payload).
 	PythonScriptPath string `conf:"wasm_python_script"`
 
-	// PythonPreloadMode controls whether Agent Python passes the trusted evaluator
+	// PythonPreloadMode controls whether Python Reactor passes the trusted evaluator
 	// through runtime_prepare. "evaluator" is the default; "off" executes the
 	// trusted script in each fresh request namespace.
 	PythonPreloadMode string `conf:"wasm_python_preload"`
 
-	// PythonLifecycle selects whether Agent Python modules are initialized for
+	// PythonLifecycle selects whether Python Reactor modules are initialized for
 	// every request, consumed once from a prepared pool, or restored to their
 	// prepared linear-memory snapshot and reused.
 	PythonLifecycle string `conf:"wasm_python_lifecycle"`
@@ -72,16 +72,21 @@ type Config struct {
 	// normal requests do not immediately grow memory beyond a restorable baseline.
 	PythonSnapshotHeadroomBytes uint64 `conf:"wasm_python_snapshot_headroom_bytes"`
 
+	// PythonPrepareTimeout bounds startup preparation and asynchronous pool refill.
+	// It is separate from the per-request timeout because large artifacts may import
+	// modules slowly during preparation while requests should remain tightly bounded.
+	PythonPrepareTimeout time.Duration `conf:"wasm_python_prepare_timeout"`
+
 	// CompileCacheDir, if non-empty, enables wazero's on-disk compilation cache.
 	// Set via FUNCTION_WASM_COMPILE_CACHE env var. Shared across all runners and
 	// processes that point at the same directory, making cold starts much faster
 	// after the first compile.
 	CompileCacheDir string `conf:"wasm_compile_cache"`
 
-	// AgentPythonObserver receives optional phase evidence. Callbacks may be
+	// PythonReactorObserver receives optional phase evidence. Callbacks may be
 	// concurrent during refill and must return promptly. It is never populated
 	// from operator configuration.
-	AgentPythonObserver func(AgentPythonPhaseEvent) `conf:"-"`
+	PythonReactorObserver func(PythonReactorPhaseEvent) `conf:"-"`
 }
 
 // applyDefaults fills in zero-value fields with sensible defaults.
@@ -106,7 +111,7 @@ func (c *Config) validatePythonPreloadMode() error {
 	}
 }
 
-func (c *Config) applyAgentPythonDefaults() {
+func (c *Config) applyPythonReactorDefaults() {
 	if c.PythonLifecycle == "" {
 		c.PythonLifecycle = "snapshot"
 	}
@@ -116,20 +121,22 @@ func (c *Config) applyAgentPythonDefaults() {
 	if c.PythonSnapshotHeadroomBytes == 0 {
 		c.PythonSnapshotHeadroomBytes = 8 * 1024 * 1024
 	}
-
+	if c.PythonPrepareTimeout == 0 {
+		c.PythonPrepareTimeout = 2 * time.Minute
+	}
 }
 
-func (c *Config) validateAgentPythonLifecycle() error {
+func (c *Config) validatePythonReactorLifecycle() error {
 	switch c.PythonLifecycle {
 	case "fresh", "single-use", "snapshot":
 	default:
-		return fmt.Errorf("agent Python lifecycle %q is invalid; use \"fresh\", \"single-use\", or \"snapshot\"", c.PythonLifecycle)
+		return fmt.Errorf("Python Reactor lifecycle %q is invalid; use \"fresh\", \"single-use\", or \"snapshot\"", c.PythonLifecycle)
 	}
 	if c.PythonPreparedCapacity < 1 || c.PythonPreparedCapacity > 4 {
-		return fmt.Errorf("agent Python prepared capacity %d is outside the supported range 1..4", c.PythonPreparedCapacity)
+		return fmt.Errorf("Python Reactor prepared capacity %d is outside the supported range 1..4", c.PythonPreparedCapacity)
 	}
 	if c.MaxInstances > 4 {
-		return fmt.Errorf("agent Python max instances %d exceeds the supported limit 4", c.MaxInstances)
+		return fmt.Errorf("Python Reactor max instances %d exceeds the supported limit 4", c.MaxInstances)
 	}
 	return nil
 }
@@ -143,7 +150,7 @@ func (c *Config) applyEnv() {
 		c.ModulePath = v
 	}
 	if v := os.Getenv("FUNCTION_WASM_MANIFEST"); v != "" {
-		c.AgentPythonManifestPath = v
+		c.PythonReactorManifestPath = v
 	}
 	if v := os.Getenv("FUNCTION_WASM_MAX_MEMORY_PAGES"); v != "" {
 		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
@@ -174,6 +181,11 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("FUNCTION_WASM_PYTHON_SNAPSHOT_HEADROOM_BYTES"); v != "" {
 		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 			c.PythonSnapshotHeadroomBytes = n
+		}
+	}
+	if v := os.Getenv("FUNCTION_WASM_PYTHON_PREPARE_TIMEOUT"); v != "" {
+		if timeout, err := time.ParseDuration(v); err == nil && timeout > 0 {
+			c.PythonPrepareTimeout = timeout
 		}
 	}
 

@@ -42,11 +42,11 @@ func CheckArtifact(ctx context.Context, options ArtifactCheckOptions) (*Artifact
 
 	var (
 		moduleBytes []byte
-		artifact    *AgentPythonArtifact
+		artifact    *PythonReactorArtifact
 		err         error
 	)
 	if profile == "python-reactor" {
-		artifact, err = verifyAgentPythonArtifact(options.ModulePath, options.ManifestPath)
+		artifact, err = verifyPythonReactorArtifact(options.ModulePath, options.ManifestPath)
 		if err != nil {
 			return nil, err
 		}

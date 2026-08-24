@@ -60,7 +60,7 @@ func inspectPythonReactorCompiledModule(compiled wazero.CompiledModule) (pythonR
 	return shape, nil
 }
 
-func verifyCompiledPythonReactorArtifact(compiled wazero.CompiledModule, artifact *AgentPythonArtifact) error {
+func verifyCompiledPythonReactorArtifact(compiled wazero.CompiledModule, artifact *PythonReactorArtifact) error {
 	shape, err := inspectPythonReactorCompiledModule(compiled)
 	if err != nil {
 		return err
@@ -68,7 +68,7 @@ func verifyCompiledPythonReactorArtifact(compiled wazero.CompiledModule, artifac
 	return verifyPythonReactorModuleShape(shape, artifact)
 }
 
-func verifyPythonReactorModuleShape(shape pythonReactorModuleShape, artifact *AgentPythonArtifact) error {
+func verifyPythonReactorModuleShape(shape pythonReactorModuleShape, artifact *PythonReactorArtifact) error {
 	if artifact == nil {
 		return fmt.Errorf("python-reactor: artifact contract is nil")
 	}

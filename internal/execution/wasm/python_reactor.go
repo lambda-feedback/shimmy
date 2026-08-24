@@ -19,17 +19,23 @@ import (
 	"go.uber.org/zap"
 )
 
+// The packaged NumPy Reactor retains about 128 MiB per prepared instance.
+// These experimental limits leave conservative headroom while bounding
+// memory.grow at 1 GiB.
 const (
-	agentPythonDefaultMemoryPages = 8192
-	agentPythonMaxMemoryPages     = 16384
-	agentPythonDiagnosticMax      = 16 * 1024
+	wasmPageSizeBytes               = 64 * 1024
+	pythonReactorDefaultMemoryBytes = 512 * 1024 * 1024
+	pythonReactorMaxMemoryBytes     = 1024 * 1024 * 1024
+	pythonReactorDefaultMemoryPages = pythonReactorDefaultMemoryBytes / wasmPageSizeBytes
+	pythonReactorMaxMemoryPages     = pythonReactorMaxMemoryBytes / wasmPageSizeBytes
+	pythonReactorDiagnosticMaxBytes = 16 * 1024
 )
 
-// AgentPythonDispatcher consumes the clean Agent Python Runtime v1 artifact.
+// PythonReactorDispatcher consumes the clean Python Reactor Runtime v1 artifact.
 // The artifact is compiled once. Module ownership is selected explicitly by
 // PythonLifecycle: fresh, never-served single-use candidates, or prepared
 // linear-memory snapshot restore.
-type AgentPythonDispatcher struct {
+type PythonReactorDispatcher struct {
 	cfg Config
 	log *zap.Logger
 
@@ -42,10 +48,10 @@ type AgentPythonDispatcher struct {
 	runtime          wazero.Runtime
 	compiled         wazero.CompiledModule
 	cache            wazero.CompilationCache
-	artifact         *AgentPythonArtifact
+	artifact         *PythonReactorArtifact
 	script           string
 	slots            chan struct{}
-	prepared         chan *agentPythonModuleSlot
+	prepared         chan *pythonReactorModuleSlot
 	snapshotSelected string
 
 	refillCtx       context.Context
@@ -61,16 +67,16 @@ type AgentPythonDispatcher struct {
 	slotCounter atomic.Uint64
 }
 
-type agentPythonModuleSlot struct {
+type pythonReactorModuleSlot struct {
 	id               uint64
 	module           api.Module
-	diagnostic       *agentPythonDiagnosticBuffer
+	diagnostic       *pythonReactorDiagnosticBuffer
 	strategy         SnapshotStrategy
 	baselineSize     uint32
 	snapshotSelected string
 }
 
-func (slot *agentPythonModuleSlot) close(ctx context.Context) error {
+func (slot *pythonReactorModuleSlot) close(ctx context.Context) error {
 	if slot == nil {
 		return nil
 	}
@@ -86,35 +92,35 @@ func (slot *agentPythonModuleSlot) close(ctx context.Context) error {
 	return errors.Join(moduleErr, strategyErr)
 }
 
-func NewAgentPythonDispatcher(cfg Config, log *zap.Logger) *AgentPythonDispatcher {
+func NewPythonReactorDispatcher(cfg Config, log *zap.Logger) *PythonReactorDispatcher {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &AgentPythonDispatcher{
+	return &PythonReactorDispatcher{
 		cfg:      cfg,
-		log:      log.Named("dispatcher_agent_python"),
+		log:      log.Named("dispatcher_python_reactor"),
 		closedCh: make(chan struct{}),
 	}
 }
 
-func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
+func (d *PythonReactorDispatcher) Start(ctx context.Context) error {
 	d.mu.Lock()
-	startupObserver := d.cfg.AgentPythonObserver
-	var startupEvents []AgentPythonPhaseEvent
+	startupObserver := d.cfg.PythonReactorObserver
+	var startupEvents []PythonReactorPhaseEvent
 	if startupObserver != nil {
 		// Start serializes dispatcher state under d.mu, but external observers must
 		// never run in that lock domain: they may synchronously inspect or shut down
 		// the dispatcher. Capture already-timed immutable events and flush them in
 		// order after releasing the lock.
-		d.cfg.AgentPythonObserver = func(event AgentPythonPhaseEvent) {
+		d.cfg.PythonReactorObserver = func(event PythonReactorPhaseEvent) {
 			startupEvents = append(startupEvents, event)
 		}
 	}
 	defer func() {
-		d.cfg.AgentPythonObserver = startupObserver
+		d.cfg.PythonReactorObserver = startupObserver
 		d.mu.Unlock()
 		for _, event := range startupEvents {
-			d.emitAgentPythonPhaseEvent(startupObserver, event)
+			d.emitPythonReactorPhaseEvent(startupObserver, event)
 		}
 	}()
 	if d.closed {
@@ -129,10 +135,10 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 		d.cfg.Timeout = 30 * time.Second
 	}
 	if d.cfg.MaxMemoryPages == 0 {
-		d.cfg.MaxMemoryPages = agentPythonDefaultMemoryPages
+		d.cfg.MaxMemoryPages = pythonReactorDefaultMemoryPages
 	}
-	if d.cfg.MaxMemoryPages > agentPythonMaxMemoryPages {
-		return fmt.Errorf("python-reactor: memory limit %d pages exceeds hard bound %d", d.cfg.MaxMemoryPages, agentPythonMaxMemoryPages)
+	if d.cfg.MaxMemoryPages > pythonReactorMaxMemoryPages {
+		return fmt.Errorf("python-reactor: memory limit %d pages exceeds hard bound %d", d.cfg.MaxMemoryPages, pythonReactorMaxMemoryPages)
 	}
 	if d.cfg.MaxInstances <= 0 {
 		d.cfg.MaxInstances = runtime.NumCPU()
@@ -146,15 +152,15 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 	if d.cfg.PythonPreloadMode == "" {
 		d.cfg.PythonPreloadMode = "evaluator"
 	}
-	d.cfg.applyAgentPythonDefaults()
+	d.cfg.applyPythonReactorDefaults()
 	if err := d.cfg.validatePythonPreloadMode(); err != nil {
 		return fmt.Errorf("python-reactor: %w", err)
 	}
-	if err := d.cfg.validateAgentPythonLifecycle(); err != nil {
+	if err := d.cfg.validatePythonReactorLifecycle(); err != nil {
 		return fmt.Errorf("python-reactor: %w", err)
 	}
 	if len(d.cfg.AllowedPaths) != 0 {
-		return errors.New("agent-python does not expose Host filesystem paths; unset FUNCTION_WASM_ALLOWED_PATHS")
+		return errors.New("python-reactor does not expose Host filesystem paths; unset FUNCTION_WASM_ALLOWED_PATHS")
 	}
 	if d.cfg.PythonScriptPath == "" {
 		return errors.New("python-reactor: PythonScriptPath must be set (FUNCTION_WASM_PYTHON_SCRIPT)")
@@ -163,15 +169,15 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("python-reactor: read script %q: %w", d.cfg.PythonScriptPath, err)
 	}
-	if len(scriptBytes) == 0 || len(scriptBytes) > agentPythonPayloadMax {
+	if len(scriptBytes) == 0 || len(scriptBytes) > pythonReactorPayloadMaxBytes {
 		return fmt.Errorf("python-reactor: trusted script size %d is outside the 1 MiB guest bound", len(scriptBytes))
 	}
 
 	phaseStart := time.Now()
-	artifact, err := verifyAgentPythonArtifact(d.cfg.ModulePath, d.cfg.AgentPythonManifestPath)
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseArtifactVerify, Purpose: AgentPythonPurposeStartup,
-		Started: phaseStart, Outcome: agentPythonPhaseOutcome(err), Err: err,
+	artifact, err := verifyPythonReactorArtifact(d.cfg.ModulePath, d.cfg.PythonReactorManifestPath)
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseArtifactVerify, Purpose: PythonReactorPurposeStartup,
+		Started: phaseStart, Outcome: pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		return err
@@ -194,9 +200,9 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 
 	phaseStart = time.Now()
 	wasmRuntime := wazero.NewRuntimeWithConfig(ctx, runtimeConfig)
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseRuntimeCreate, Purpose: AgentPythonPurposeStartup,
-		Started: phaseStart, Outcome: AgentPythonOutcomeOK,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseRuntimeCreate, Purpose: PythonReactorPurposeStartup,
+		Started: phaseStart, Outcome: PythonReactorOutcomeOK,
 	})
 	closePartial := func() {
 		_ = wasmRuntime.Close(context.Background())
@@ -206,9 +212,9 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 	}
 	phaseStart = time.Now()
 	_, err = wasi_snapshot_preview1.Instantiate(ctx, wasmRuntime)
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseWASIImports, Purpose: AgentPythonPurposeStartup,
-		Started: phaseStart, Outcome: agentPythonPhaseOutcome(err), Err: err,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseWASIImports, Purpose: PythonReactorPurposeStartup,
+		Started: phaseStart, Outcome: pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		closePartial()
@@ -217,12 +223,12 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 	phaseStart = time.Now()
 	_, err = wasmRuntime.NewHostModuleBuilder("agent_runtime_v1").
 		NewFunctionBuilder().
-		WithFunc(agentPythonDeniedHostCall).
+		WithFunc(pythonReactorDeniedHostCall).
 		Export("host_call").
 		Instantiate(ctx)
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseHostImports, Purpose: AgentPythonPurposeStartup,
-		Started: phaseStart, Outcome: agentPythonPhaseOutcome(err), Err: err,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseHostImports, Purpose: PythonReactorPurposeStartup,
+		Started: phaseStart, Outcome: pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		closePartial()
@@ -230,9 +236,9 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 	}
 	phaseStart = time.Now()
 	compiled, err := wasmRuntime.CompileModule(ctx, artifact.WasmBytes)
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseCompile, Purpose: AgentPythonPurposeStartup,
-		Started: phaseStart, Outcome: agentPythonPhaseOutcome(err), Err: err,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseCompile, Purpose: PythonReactorPurposeStartup,
+		Started: phaseStart, Outcome: pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		closePartial()
@@ -253,9 +259,9 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 
 	switch d.cfg.PythonLifecycle {
 	case "snapshot":
-		d.prepared = make(chan *agentPythonModuleSlot, d.cfg.MaxInstances)
+		d.prepared = make(chan *pythonReactorModuleSlot, d.cfg.MaxInstances)
 		for i := 0; i < d.cfg.MaxInstances; i++ {
-			slot, err := d.newPreparedModuleSlot(ctx, true, AgentPythonPurposeStartup, 0)
+			slot, err := d.newPreparedModuleSlotWithPrepareTimeout(ctx, true, PythonReactorPurposeStartup, 0)
 			if err != nil {
 				_ = d.closeRuntime(context.Background())
 				return err
@@ -264,9 +270,9 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 			d.prepared <- slot
 		}
 	case "single-use":
-		d.prepared = make(chan *agentPythonModuleSlot, d.cfg.PythonPreparedCapacity)
+		d.prepared = make(chan *pythonReactorModuleSlot, d.cfg.PythonPreparedCapacity)
 		for i := 0; i < d.cfg.PythonPreparedCapacity; i++ {
-			slot, err := d.newPreparedModuleSlot(ctx, false, AgentPythonPurposeStartup, 0)
+			slot, err := d.newPreparedModuleSlotWithPrepareTimeout(ctx, false, PythonReactorPurposeStartup, 0)
 			if err != nil {
 				_ = d.closeRuntime(context.Background())
 				return err
@@ -275,7 +281,7 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 		}
 	case "fresh":
 		// Probe the exact artifact and trusted script before reporting readiness.
-		slot, err := d.newPreparedModuleSlot(ctx, false, AgentPythonPurposeStartup, 0)
+		slot, err := d.newPreparedModuleSlotWithPrepareTimeout(ctx, false, PythonReactorPurposeStartup, 0)
 		if err != nil {
 			_ = d.closeRuntime(context.Background())
 			return err
@@ -284,7 +290,7 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 	}
 
 	d.started = true
-	d.log.Info("agent-python dispatcher ready",
+	d.log.Info("python-reactor dispatcher ready",
 		zap.String("artifact_sha256", artifact.SHA256),
 		zap.String("producer_commit", artifact.ProducerCommit),
 		zap.String("artifact_profile", artifact.Profile),
@@ -297,7 +303,7 @@ func (d *AgentPythonDispatcher) Start(ctx context.Context) error {
 	return nil
 }
 
-func (d *AgentPythonDispatcher) Send(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
+func (d *PythonReactorDispatcher) Send(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
 	if method == "healthcheck" {
 		d.mu.Lock()
 		ready := d.started && !d.closed
@@ -351,7 +357,7 @@ func (d *AgentPythonDispatcher) Send(ctx context.Context, method string, params 
 		if d.cfg.PythonPreloadMode == "off" {
 			scriptInRequest = d.script
 		}
-		request, err = buildAgentPythonRunRequest(runID, method, params, scriptInRequest)
+		request, err = buildPythonReactorRunRequest(runID, method, params, scriptInRequest)
 	}
 	if err != nil {
 		return nil, err
@@ -360,17 +366,17 @@ func (d *AgentPythonDispatcher) Send(ctx context.Context, method string, params 
 	runContext, cancel := context.WithTimeout(ctx, d.cfg.Timeout)
 	defer cancel()
 
-	var slot *agentPythonModuleSlot
+	var slot *pythonReactorModuleSlot
 	checkoutStart := time.Now()
 	switch d.cfg.PythonLifecycle {
 	case "snapshot":
-		slot, err = acquireAgentPythonSnapshotSlot(
+		slot, err = acquirePythonReactorSnapshotSlot(
 			runContext,
 			d.prepared,
 			d.closedCh,
 			d.snapshotRefillInFlight,
-			func(createContext context.Context) (*agentPythonModuleSlot, error) {
-				return d.newPreparedModuleSlot(createContext, true, AgentPythonPurposeReplacement, requestID)
+			func(createContext context.Context) (*pythonReactorModuleSlot, error) {
+				return d.newPreparedModuleSlot(createContext, true, PythonReactorPurposeReplacement, requestID)
 			},
 		)
 		if err != nil {
@@ -385,83 +391,83 @@ func (d *AgentPythonDispatcher) Send(ctx context.Context, method string, params 
 		}
 		d.scheduleSingleUseRefill(requestID)
 		if slot == nil {
-			slot, err = d.newPreparedModuleSlot(runContext, false, AgentPythonPurposeFresh, requestID)
+			slot, err = d.newPreparedModuleSlot(runContext, false, PythonReactorPurposeFresh, requestID)
 			if err != nil {
 				return nil, err
 			}
 		}
 	case "fresh":
-		slot, err = d.newPreparedModuleSlot(runContext, false, AgentPythonPurposeFresh, requestID)
+		slot, err = d.newPreparedModuleSlot(runContext, false, PythonReactorPurposeFresh, requestID)
 		if err != nil {
 			return nil, err
 		}
 	}
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseCheckout, Purpose: AgentPythonPurposeRequest,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseCheckout, Purpose: PythonReactorPurposeRequest,
 		RequestID: requestID, SlotID: slot.id, Started: checkoutStart,
 		MemoryBytes: uint64(slot.module.Memory().Size()), SnapshotSelected: slot.snapshotSelected,
-		Outcome: AgentPythonOutcomeOK,
+		Outcome: PythonReactorOutcomeOK,
 	})
 	if d.cfg.PythonLifecycle != "snapshot" {
 		defer func() {
 			phaseStart := time.Now()
 			closeErr := slot.close(context.Background())
-			d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-				Phase: AgentPythonPhaseClose, Purpose: AgentPythonPurposeRequest,
+			d.observePythonReactorPhase(PythonReactorPhaseObservation{
+				Phase: PythonReactorPhaseClose, Purpose: PythonReactorPurposeRequest,
 				RequestID: requestID, SlotID: slot.id, Started: phaseStart,
-				Outcome: agentPythonPhaseOutcome(closeErr), Err: closeErr,
+				Outcome: pythonReactorPhaseOutcome(closeErr), Err: closeErr,
 			})
 		}()
 	}
 
 	phaseStart := time.Now()
-	payload, callErr := callAgentPythonExecute(runContext, slot.module, d.artifact.ExecuteExport, request)
+	payload, callErr := callPythonReactorExecute(runContext, slot.module, d.artifact.ExecuteExport, request)
 	if callErr != nil && runContext.Err() != nil {
 		callErr = errors.Join(callErr, runContext.Err())
 	}
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseExecute, Purpose: AgentPythonPurposeRequest,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseExecute, Purpose: PythonReactorPurposeRequest,
 		RequestID: requestID, SlotID: slot.id, Started: phaseStart,
 		MemoryBytes: uint64(slot.module.Memory().Size()), SnapshotSelected: slot.snapshotSelected,
-		Outcome: agentPythonPhaseOutcome(callErr), Err: callErr,
+		Outcome: pythonReactorPhaseOutcome(callErr), Err: callErr,
 	})
 
 	if d.cfg.PythonLifecycle == "snapshot" {
 		var restoreErr error
 		if callErr == nil {
 			phaseStart = time.Now()
-			restoreErr = restoreAgentPythonSnapshot(slot)
-			d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-				Phase: AgentPythonPhaseRestore, Purpose: AgentPythonPurposeRequest,
+			restoreErr = restorePythonReactorSnapshot(slot)
+			d.observePythonReactorPhase(PythonReactorPhaseObservation{
+				Phase: PythonReactorPhaseRestore, Purpose: PythonReactorPurposeRequest,
 				RequestID: requestID, SlotID: slot.id, Started: phaseStart,
 				MemoryBytes: uint64(slot.module.Memory().Size()), SnapshotSelected: slot.snapshotSelected,
-				Outcome: agentPythonPhaseOutcome(restoreErr), Err: restoreErr,
+				Outcome: pythonReactorPhaseOutcome(restoreErr), Err: restoreErr,
 			})
 		}
 		if callErr != nil || restoreErr != nil {
 			diagnostic := slot.diagnostic.String()
 			d.discardSnapshotSlotAsync(slot, requestID)
 			d.scheduleSnapshotRefill(requestID)
-			return nil, withAgentPythonDiagnostic(errors.Join(callErr, restoreErr), diagnostic)
+			return nil, withPythonReactorDiagnostic(errors.Join(callErr, restoreErr), diagnostic)
 		}
 		slot.diagnostic.Reset()
 		d.prepared <- slot
 	}
 	if callErr != nil {
-		return nil, withAgentPythonDiagnostic(callErr, slot.diagnostic.String())
+		return nil, withPythonReactorDiagnostic(callErr, slot.diagnostic.String())
 	}
 	phaseStart = time.Now()
 	var result map[string]any
 	if d.artifact.ABI == "shimmy-python-runtime/v1" {
 		result, err = decodeShimmyPythonResponse(payload)
 	} else {
-		result, err = decodeAgentPythonResponse(payload)
+		result, err = decodePythonReactorResponse(payload)
 	}
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseDecode, Purpose: AgentPythonPurposeRequest,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseDecode, Purpose: PythonReactorPurposeRequest,
 		RequestID: requestID, SlotID: slot.id, Started: phaseStart,
 		SnapshotSelected: slot.snapshotSelected,
-		Outcome:          agentPythonPhaseOutcome(err), Err: err,
+		Outcome:          pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		return nil, err
@@ -469,13 +475,13 @@ func (d *AgentPythonDispatcher) Send(ctx context.Context, method string, params 
 	return map[string]any{"command": method, "result": result}, nil
 }
 
-func acquireAgentPythonSnapshotSlot(
+func acquirePythonReactorSnapshotSlot(
 	ctx context.Context,
-	prepared <-chan *agentPythonModuleSlot,
+	prepared <-chan *pythonReactorModuleSlot,
 	closed <-chan struct{},
 	refillInFlight func() bool,
-	create func(context.Context) (*agentPythonModuleSlot, error),
-) (*agentPythonModuleSlot, error) {
+	create func(context.Context) (*pythonReactorModuleSlot, error),
+) (*pythonReactorModuleSlot, error) {
 	select {
 	case slot := <-prepared:
 		if slot != nil {
@@ -510,7 +516,7 @@ func acquireAgentPythonSnapshotSlot(
 	return slot, nil
 }
 
-func (d *AgentPythonDispatcher) resetMode() string {
+func (d *PythonReactorDispatcher) resetMode() string {
 	switch d.cfg.PythonLifecycle {
 	case "snapshot":
 		return "linear-memory-" + d.snapshotSelected
@@ -521,14 +527,14 @@ func (d *AgentPythonDispatcher) resetMode() string {
 	}
 }
 
-func (d *AgentPythonDispatcher) snapshotMode() string {
+func (d *PythonReactorDispatcher) snapshotMode() string {
 	if d.cfg.PythonLifecycle == "snapshot" {
 		return "memcpy"
 	}
 	return ""
 }
 
-func (d *AgentPythonDispatcher) tryBeginSend() bool {
+func (d *PythonReactorDispatcher) tryBeginSend() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if !d.started || d.closed {
@@ -538,14 +544,14 @@ func (d *AgentPythonDispatcher) tryBeginSend() bool {
 	return true
 }
 
-func (d *AgentPythonDispatcher) newInitializedModule(
+func (d *PythonReactorDispatcher) newInitializedModule(
 	ctx context.Context,
 	prepare bool,
-	purpose AgentPythonPurpose,
+	purpose PythonReactorPurpose,
 	requestID uint64,
 	slotID uint64,
-) (api.Module, *agentPythonDiagnosticBuffer, error) {
-	diagnostic := &agentPythonDiagnosticBuffer{}
+) (api.Module, *pythonReactorDiagnosticBuffer, error) {
+	diagnostic := &pythonReactorDiagnosticBuffer{}
 	phaseStart := time.Now()
 	module, err := d.runtime.InstantiateModule(
 		ctx,
@@ -556,9 +562,9 @@ func (d *AgentPythonDispatcher) newInitializedModule(
 	if module != nil && module.Memory() != nil {
 		memoryBytes = uint64(module.Memory().Size())
 	}
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseInstantiate, Purpose: purpose, RequestID: requestID, SlotID: slotID,
-		Started: phaseStart, MemoryBytes: memoryBytes, Outcome: agentPythonPhaseOutcome(err), Err: err,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseInstantiate, Purpose: purpose, RequestID: requestID, SlotID: slotID,
+		Started: phaseStart, MemoryBytes: memoryBytes, Outcome: pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		return nil, diagnostic, fmt.Errorf("python-reactor: instantiate guest: %w", err)
@@ -570,36 +576,36 @@ func (d *AgentPythonDispatcher) newInitializedModule(
 		}
 	}()
 	phaseStart = time.Now()
-	err = callAgentPythonNoArgs(ctx, module, "_initialize")
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseInitialize, Purpose: purpose, RequestID: requestID, SlotID: slotID,
-		Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: agentPythonPhaseOutcome(err), Err: err,
+	err = callPythonReactorNoArgs(ctx, module, "_initialize")
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseInitialize, Purpose: purpose, RequestID: requestID, SlotID: slotID,
+		Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		return nil, diagnostic, err
 	}
 	phaseStart = time.Now()
 	if d.artifact.ABI == "shimmy-python-runtime/v1" {
-		err = callAgentPythonNoArgsValue(ctx, module, "shimmy_python_runtime_identity", 0x53505231)
+		err = callPythonReactorNoArgsValue(ctx, module, "shimmy_python_runtime_identity", 0x53505231)
 		if err == nil {
-			err = callAgentPythonNoArgsValue(ctx, module, d.artifact.InitExport, 0)
+			err = callPythonReactorNoArgsValue(ctx, module, d.artifact.InitExport, 0)
 		}
 	} else {
-		err = callAgentPythonStatus(ctx, module, d.artifact.InitExport, []byte("{}"))
+		err = callPythonReactorStatus(ctx, module, d.artifact.InitExport, []byte("{}"))
 	}
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseRuntimeInit, Purpose: purpose, RequestID: requestID, SlotID: slotID,
-		Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: agentPythonPhaseOutcome(err), Err: err,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseRuntimeInit, Purpose: purpose, RequestID: requestID, SlotID: slotID,
+		Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		return nil, diagnostic, err
 	}
 	if prepare {
 		phaseStart = time.Now()
-		err = callAgentPythonStatus(ctx, module, d.artifact.PrepareExport, []byte(d.script))
-		d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-			Phase: AgentPythonPhaseRuntimePrepare, Purpose: purpose, RequestID: requestID, SlotID: slotID,
-			Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: agentPythonPhaseOutcome(err), Err: err,
+		err = callPythonReactorStatus(ctx, module, d.artifact.PrepareExport, []byte(d.script))
+		d.observePythonReactorPhase(PythonReactorPhaseObservation{
+			Phase: PythonReactorPhaseRuntimePrepare, Purpose: purpose, RequestID: requestID, SlotID: slotID,
+			Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: pythonReactorPhaseOutcome(err), Err: err,
 		})
 		if err != nil {
 			return nil, diagnostic, err
@@ -610,7 +616,7 @@ func (d *AgentPythonDispatcher) newInitializedModule(
 	return module, diagnostic, nil
 }
 
-func reserveAgentPythonSnapshotHeadroom(ctx context.Context, module api.Module, bytes uint64) (retErr error) {
+func reservePythonReactorSnapshotHeadroom(ctx context.Context, module api.Module, bytes uint64) (retErr error) {
 	if bytes == 0 {
 		return nil
 	}
@@ -651,12 +657,23 @@ func reserveAgentPythonSnapshotHeadroom(ctx context.Context, module api.Module, 
 	return nil
 }
 
-func (d *AgentPythonDispatcher) newPreparedModuleSlot(
+func (d *PythonReactorDispatcher) newPreparedModuleSlotWithPrepareTimeout(
 	ctx context.Context,
 	takeSnapshot bool,
-	purpose AgentPythonPurpose,
+	purpose PythonReactorPurpose,
 	requestID uint64,
-) (*agentPythonModuleSlot, error) {
+) (*pythonReactorModuleSlot, error) {
+	prepareCtx, cancel := context.WithTimeout(ctx, d.cfg.PythonPrepareTimeout)
+	defer cancel()
+	return d.newPreparedModuleSlot(prepareCtx, takeSnapshot, purpose, requestID)
+}
+
+func (d *PythonReactorDispatcher) newPreparedModuleSlot(
+	ctx context.Context,
+	takeSnapshot bool,
+	purpose PythonReactorPurpose,
+	requestID uint64,
+) (*pythonReactorModuleSlot, error) {
 	slotID := d.slotCounter.Add(1)
 	module, diagnostic, err := d.newInitializedModule(
 		ctx,
@@ -666,9 +683,9 @@ func (d *AgentPythonDispatcher) newPreparedModuleSlot(
 		slotID,
 	)
 	if err != nil {
-		return nil, withAgentPythonDiagnostic(err, diagnostic.String())
+		return nil, withPythonReactorDiagnostic(err, diagnostic.String())
 	}
-	slot := &agentPythonModuleSlot{
+	slot := &pythonReactorModuleSlot{
 		id:         slotID,
 		module:     module,
 		diagnostic: diagnostic,
@@ -677,10 +694,10 @@ func (d *AgentPythonDispatcher) newPreparedModuleSlot(
 		return slot, nil
 	}
 	phaseStart := time.Now()
-	err = reserveAgentPythonSnapshotHeadroom(ctx, module, d.cfg.PythonSnapshotHeadroomBytes)
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseHeadroom, Purpose: purpose, RequestID: requestID, SlotID: slotID,
-		Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: agentPythonPhaseOutcome(err), Err: err,
+	err = reservePythonReactorSnapshotHeadroom(ctx, module, d.cfg.PythonSnapshotHeadroomBytes)
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseHeadroom, Purpose: purpose, RequestID: requestID, SlotID: slotID,
+		Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		_ = slot.close(context.Background())
@@ -689,17 +706,17 @@ func (d *AgentPythonDispatcher) newPreparedModuleSlot(
 	phaseStart = time.Now()
 	slot.strategy = NewFullMemcpyStrategy()
 	slot.snapshotSelected = "memcpy"
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseStrategySelect, Purpose: purpose, RequestID: requestID, SlotID: slotID,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseStrategySelect, Purpose: purpose, RequestID: requestID, SlotID: slotID,
 		Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), SnapshotSelected: slot.snapshotSelected,
-		Outcome: AgentPythonOutcomeOK,
+		Outcome: PythonReactorOutcomeOK,
 	})
 	phaseStart = time.Now()
 	err = slot.strategy.Take(module.Memory())
-	d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-		Phase: AgentPythonPhaseSnapshotTake, Purpose: purpose, RequestID: requestID, SlotID: slotID,
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseSnapshotTake, Purpose: purpose, RequestID: requestID, SlotID: slotID,
 		Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), SnapshotSelected: slot.snapshotSelected,
-		Outcome: agentPythonPhaseOutcome(err), Err: err,
+		Outcome: pythonReactorPhaseOutcome(err), Err: err,
 	})
 	if err != nil {
 		_ = slot.close(context.Background())
@@ -709,7 +726,7 @@ func (d *AgentPythonDispatcher) newPreparedModuleSlot(
 	return slot, nil
 }
 
-func restoreAgentPythonSnapshot(slot *agentPythonModuleSlot) error {
+func restorePythonReactorSnapshot(slot *pythonReactorModuleSlot) error {
 	if slot == nil || slot.module == nil || slot.strategy == nil {
 		return errors.New("python-reactor: prepared snapshot slot is incomplete")
 	}
@@ -723,7 +740,7 @@ func restoreAgentPythonSnapshot(slot *agentPythonModuleSlot) error {
 	return slot.strategy.Restore(memory)
 }
 
-func (d *AgentPythonDispatcher) discardSnapshotSlotAsync(slot *agentPythonModuleSlot, requestID uint64) {
+func (d *PythonReactorDispatcher) discardSnapshotSlotAsync(slot *pythonReactorModuleSlot, requestID uint64) {
 	// Send already holds one pending count, so this Add cannot race Shutdown's
 	// Wait. Closing a context-cancelled wazero module or its snapshot strategy
 	// can block and must not extend the request deadline.
@@ -732,21 +749,21 @@ func (d *AgentPythonDispatcher) discardSnapshotSlotAsync(slot *agentPythonModule
 		defer d.pending.Done()
 		phaseStart := time.Now()
 		closeErr := slot.close(context.Background())
-		d.observeAgentPythonPhase(AgentPythonPhaseObservation{
-			Phase: AgentPythonPhaseClose, Purpose: AgentPythonPurposeRequest,
+		d.observePythonReactorPhase(PythonReactorPhaseObservation{
+			Phase: PythonReactorPhaseClose, Purpose: PythonReactorPurposeRequest,
 			RequestID: requestID, SlotID: slot.id, Started: phaseStart,
-			Outcome: agentPythonPhaseOutcome(closeErr), Err: closeErr,
+			Outcome: pythonReactorPhaseOutcome(closeErr), Err: closeErr,
 		})
 	}()
 }
 
-func (d *AgentPythonDispatcher) snapshotRefillInFlight() bool {
+func (d *PythonReactorDispatcher) snapshotRefillInFlight() bool {
 	d.refillMu.Lock()
 	defer d.refillMu.Unlock()
 	return d.refillInFlight > 0
 }
 
-func (d *AgentPythonDispatcher) scheduleSnapshotRefill(requestID uint64) {
+func (d *PythonReactorDispatcher) scheduleSnapshotRefill(requestID uint64) {
 	if d.refillCtx == nil || d.prepared == nil {
 		return
 	}
@@ -768,16 +785,10 @@ func (d *AgentPythonDispatcher) scheduleSnapshotRefill(requestID uint64) {
 			d.refillMu.Unlock()
 		}()
 
-		timeout := d.cfg.Timeout
-		if timeout < 30*time.Second {
-			timeout = 30 * time.Second
-		}
-		ctx, cancel := context.WithTimeout(refillCtx, timeout)
-		defer cancel()
-		slot, err := d.newPreparedModuleSlot(ctx, true, AgentPythonPurposeReplacement, requestID)
+		slot, err := d.newPreparedModuleSlotWithPrepareTimeout(refillCtx, true, PythonReactorPurposeReplacement, requestID)
 		if err != nil {
 			if refillCtx.Err() == nil {
-				d.log.Warn("agent-python snapshot refill failed", zap.Error(err))
+				d.log.Warn("python-reactor snapshot refill failed", zap.Error(err))
 			}
 			return
 		}
@@ -790,7 +801,7 @@ func (d *AgentPythonDispatcher) scheduleSnapshotRefill(requestID uint64) {
 	}()
 }
 
-func (d *AgentPythonDispatcher) scheduleSingleUseRefill(requestID uint64) {
+func (d *PythonReactorDispatcher) scheduleSingleUseRefill(requestID uint64) {
 	if d.refillCtx == nil || d.prepared == nil {
 		return
 	}
@@ -812,16 +823,10 @@ func (d *AgentPythonDispatcher) scheduleSingleUseRefill(requestID uint64) {
 			d.refillMu.Unlock()
 		}()
 
-		timeout := d.cfg.Timeout
-		if timeout < 30*time.Second {
-			timeout = 30 * time.Second
-		}
-		ctx, cancel := context.WithTimeout(refillCtx, timeout)
-		defer cancel()
-		slot, err := d.newPreparedModuleSlot(ctx, false, AgentPythonPurposeRefill, requestID)
+		slot, err := d.newPreparedModuleSlotWithPrepareTimeout(refillCtx, false, PythonReactorPurposeRefill, requestID)
 		if err != nil {
 			if refillCtx.Err() == nil {
-				d.log.Warn("agent-python single-use refill failed", zap.Error(err))
+				d.log.Warn("python-reactor single-use refill failed", zap.Error(err))
 			}
 			return
 		}
@@ -834,7 +839,7 @@ func (d *AgentPythonDispatcher) scheduleSingleUseRefill(requestID uint64) {
 	}()
 }
 
-func (d *AgentPythonDispatcher) Shutdown(ctx context.Context) error {
+func (d *PythonReactorDispatcher) Shutdown(ctx context.Context) error {
 	d.mu.Lock()
 	if d.closed {
 		d.mu.Unlock()
@@ -854,7 +859,7 @@ func (d *AgentPythonDispatcher) Shutdown(ctx context.Context) error {
 	return d.closeRuntime(ctx)
 }
 
-func (d *AgentPythonDispatcher) closeRuntime(ctx context.Context) error {
+func (d *PythonReactorDispatcher) closeRuntime(ctx context.Context) error {
 	if d.refillCancel != nil {
 		d.refillCancel()
 		d.refillCancel = nil
@@ -891,11 +896,11 @@ preparedClosed:
 	return errors.Join(slotErr, compiledErr, runtimeErr, cacheErr)
 }
 
-func agentPythonDeniedHostCall(context.Context, api.Module, uint32, uint32, uint32, uint32) int32 {
+func pythonReactorDeniedHostCall(context.Context, api.Module, uint32, uint32, uint32, uint32) int32 {
 	return -1
 }
 
-func callAgentPythonNoArgs(ctx context.Context, module api.Module, name string) error {
+func callPythonReactorNoArgs(ctx context.Context, module api.Module, name string) error {
 	function := module.ExportedFunction(name)
 	if function == nil {
 		return fmt.Errorf("python-reactor: required export %q is missing", name)
@@ -906,7 +911,7 @@ func callAgentPythonNoArgs(ctx context.Context, module api.Module, name string) 
 	return nil
 }
 
-func callAgentPythonNoArgsValue(ctx context.Context, module api.Module, name string, expected uint32) error {
+func callPythonReactorNoArgsValue(ctx context.Context, module api.Module, name string, expected uint32) error {
 	function := module.ExportedFunction(name)
 	if function == nil {
 		return fmt.Errorf("python-reactor: required export %q is missing", name)
@@ -921,8 +926,8 @@ func callAgentPythonNoArgsValue(ctx context.Context, module api.Module, name str
 	return nil
 }
 
-func callAgentPythonStatus(ctx context.Context, module api.Module, name string, data []byte) error {
-	results, release, err := callAgentPythonWithBytes(ctx, module, name, data)
+func callPythonReactorStatus(ctx context.Context, module api.Module, name string, data []byte) error {
+	results, release, err := callPythonReactorWithBytes(ctx, module, name, data)
 	if release != nil {
 		defer release()
 	}
@@ -935,11 +940,11 @@ func callAgentPythonStatus(ctx context.Context, module api.Module, name string, 
 	return nil
 }
 
-func callAgentPythonExecute(ctx context.Context, module api.Module, name string, request []byte) ([]byte, error) {
+func callPythonReactorExecute(ctx context.Context, module api.Module, name string, request []byte) ([]byte, error) {
 	if name == "" {
 		name = "execute"
 	}
-	results, release, err := callAgentPythonWithBytes(ctx, module, name, request)
+	results, release, err := callPythonReactorWithBytes(ctx, module, name, request)
 	if release != nil {
 		defer release()
 	}
@@ -949,11 +954,11 @@ func callAgentPythonExecute(ctx context.Context, module api.Module, name string,
 	if len(results) != 1 {
 		return nil, errors.New("python-reactor: execute returned an unexpected result count")
 	}
-	return readAgentPythonResponse(module.Memory(), uint32(results[0]))
+	return readPythonReactorResponse(module.Memory(), uint32(results[0]))
 }
 
-func callAgentPythonWithBytes(ctx context.Context, module api.Module, name string, data []byte) ([]uint64, func(), error) {
-	if len(data) == 0 || len(data) > agentPythonPayloadMax || len(data) > math.MaxUint32 {
+func callPythonReactorWithBytes(ctx context.Context, module api.Module, name string, data []byte) ([]uint64, func(), error) {
+	if len(data) == 0 || len(data) > pythonReactorPayloadMaxBytes || len(data) > math.MaxUint32 {
 		return nil, nil, fmt.Errorf("python-reactor: %s input size %d is outside the guest bound", name, len(data))
 	}
 	allocate := module.ExportedFunction("alloc")
@@ -989,7 +994,7 @@ func callAgentPythonWithBytes(ctx context.Context, module api.Module, name strin
 	return results, release, nil
 }
 
-func readAgentPythonResponse(memory api.Memory, pointer uint32) ([]byte, error) {
+func readPythonReactorResponse(memory api.Memory, pointer uint32) ([]byte, error) {
 	if memory == nil {
 		return nil, errors.New("python-reactor: guest module has no linear memory")
 	}
@@ -998,8 +1003,8 @@ func readAgentPythonResponse(memory api.Memory, pointer uint32) ([]byte, error) 
 		return nil, errors.New("python-reactor: response length prefix is out of bounds")
 	}
 	length := binary.LittleEndian.Uint32(header)
-	if length > agentPythonPayloadMax {
-		return nil, fmt.Errorf("python-reactor: response payload length %d exceeds limit %d", length, agentPythonPayloadMax)
+	if length > pythonReactorPayloadMaxBytes {
+		return nil, fmt.Errorf("python-reactor: response payload length %d exceeds limit %d", length, pythonReactorPayloadMaxBytes)
 	}
 	if uint64(pointer)+4+uint64(length) > uint64(memory.Size()) {
 		return nil, errors.New("python-reactor: response frame is out of bounds")
@@ -1011,17 +1016,17 @@ func readAgentPythonResponse(memory api.Memory, pointer uint32) ([]byte, error) 
 	return append([]byte(nil), payload...), nil
 }
 
-type agentPythonDiagnosticBuffer struct {
+type pythonReactorDiagnosticBuffer struct {
 	data []byte
 }
 
-func (buffer *agentPythonDiagnosticBuffer) Write(data []byte) (int, error) {
+func (buffer *pythonReactorDiagnosticBuffer) Write(data []byte) (int, error) {
 	length := len(data)
-	if length >= agentPythonDiagnosticMax {
-		buffer.data = append(buffer.data[:0], data[length-agentPythonDiagnosticMax:]...)
+	if length >= pythonReactorDiagnosticMaxBytes {
+		buffer.data = append(buffer.data[:0], data[length-pythonReactorDiagnosticMaxBytes:]...)
 		return length, nil
 	}
-	if overflow := len(buffer.data) + length - agentPythonDiagnosticMax; overflow > 0 {
+	if overflow := len(buffer.data) + length - pythonReactorDiagnosticMaxBytes; overflow > 0 {
 		copy(buffer.data, buffer.data[overflow:])
 		buffer.data = buffer.data[:len(buffer.data)-overflow]
 	}
@@ -1029,10 +1034,10 @@ func (buffer *agentPythonDiagnosticBuffer) Write(data []byte) (int, error) {
 	return length, nil
 }
 
-func (buffer *agentPythonDiagnosticBuffer) String() string { return string(buffer.data) }
-func (buffer *agentPythonDiagnosticBuffer) Reset()         { buffer.data = buffer.data[:0] }
+func (buffer *pythonReactorDiagnosticBuffer) String() string { return string(buffer.data) }
+func (buffer *pythonReactorDiagnosticBuffer) Reset()         { buffer.data = buffer.data[:0] }
 
-func withAgentPythonDiagnostic(base error, diagnostic string) error {
+func withPythonReactorDiagnostic(base error, diagnostic string) error {
 	if diagnostic == "" {
 		return base
 	}

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 WASM="${SHIMMY_PYTHON_REACTOR_WASM:?set SHIMMY_PYTHON_REACTOR_WASM to a Producer artifact}"
 MANIFEST="${SHIMMY_PYTHON_REACTOR_MANIFEST:?set SHIMMY_PYTHON_REACTOR_MANIFEST to its manifest.json}"
 EVALUATOR="${SHIMMY_E2E_EVALUATOR:-${ROOT}/tests/e2e/python-reactor/evaluator.py}"

@@ -61,6 +61,12 @@ implementation is always full-memory copy; there is no snapshot-strategy
 configuration. `single-use` and `fresh` are lifecycle alternatives, not hidden
 fallbacks. Shimmy never changes lifecycle after a request fails.
 
+Preparation and background refill use a separate two-minute deadline so slow
+artifact imports do not widen request deadlines. Override it with
+`FUNCTION_WASM_PYTHON_PREPARE_TIMEOUT`; request execution remains controlled by
+`FUNCTION_WORKER_SEND_TIMEOUT`. The linear-memory ceiling remains configurable
+with `FUNCTION_WASM_MAX_MEMORY_PAGES`.
+
 Python Reactor does not expose host paths. Leave
 `FUNCTION_WASM_ALLOWED_PATHS` unset. Runtime modules are selected by the
 manifest-validated artifact profile, for example `base`, `numpy-core`, or
@@ -74,7 +80,7 @@ its exact manifest:
 ```bash
 SHIMMY_PYTHON_REACTOR_WASM=/opt/runtime/python-reactor.wasm \
 SHIMMY_PYTHON_REACTOR_MANIFEST=/opt/runtime/manifest.json \
-  scripts/e2e-python-reactor.sh
+  tests/e2e/python-reactor/run.sh
 ```
 
 The check starts Shimmy, sends two `eval` requests and one `preview` request,

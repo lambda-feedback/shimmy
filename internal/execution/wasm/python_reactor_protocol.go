@@ -1,6 +1,6 @@
 package wasm
 
-// This file carries the consumer copy of the neutral Agent Python Runtime v1
+// This file carries the consumer copy of the neutral Python Reactor Runtime v1
 // request/response and artifact contract. The source contract was pinned from
 // bkmashiro/agent-python-runtime guest commit
 // 9a571176bb58c2d6a41312d01ad789abdd6b82e6 with repository-owner approval.
@@ -19,18 +19,20 @@ import (
 	"sort"
 )
 
-const agentPythonPayloadMax = 1024 * 1024
+// Keep Host-to-Guest protocol frames bounded independently of evaluator-level
+// limits. Student code and output use tighter limits in the evaluator.
+const pythonReactorPayloadMaxBytes = 1 * 1024 * 1024
 
-const agentPythonPreparedCall = `_shimmy_dispatch = globals().get("dispatch")
+const pythonReactorPreparedCall = `_shimmy_dispatch = globals().get("dispatch")
 if not callable(_shimmy_dispatch):
     raise RuntimeError("python reactor artifact must define callable dispatch(method, payload)")
 result = _shimmy_dispatch(inputs["method"], inputs["params"])
 `
 
-const agentPythonUnpreparedCall = `exec(compile(inputs["script"], "<shimmy-trusted-script>", "exec"), globals(), globals())
-` + agentPythonPreparedCall
+const pythonReactorUnpreparedCall = `exec(compile(inputs["script"], "<shimmy-trusted-script>", "exec"), globals(), globals())
+` + pythonReactorPreparedCall
 
-type AgentPythonArtifact struct {
+type PythonReactorArtifact struct {
 	WasmBytes       []byte
 	ABI             string
 	Profile         string
@@ -45,7 +47,7 @@ type AgentPythonArtifact struct {
 	DeclaredImports []pythonReactorImport
 }
 
-type agentPythonManifest struct {
+type pythonReactorManifest struct {
 	SchemaVersion   int    `json:"schema_version"`
 	ABIVersion      string `json:"abi_version"`
 	ArtifactProfile string `json:"artifact_profile"`
@@ -99,9 +101,9 @@ type shimmyPythonManifest struct {
 	} `json:"wasm"`
 }
 
-var agentPythonCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var pythonReactorCommitPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-func verifyAgentPythonArtifact(modulePath, manifestPath string) (*AgentPythonArtifact, error) {
+func verifyPythonReactorArtifact(modulePath, manifestPath string) (*PythonReactorArtifact, error) {
 	if modulePath == "" {
 		return nil, errors.New("python-reactor: ModulePath must be set (FUNCTION_WASM_MODULE)")
 	}
@@ -121,7 +123,7 @@ func verifyAgentPythonArtifact(modulePath, manifestPath string) (*AgentPythonArt
 	if format.Schema != "" {
 		return verifyShimmyPythonArtifact(modulePath, manifestPath, manifestBytes)
 	}
-	var manifest agentPythonManifest
+	var manifest pythonReactorManifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return nil, fmt.Errorf("python-reactor: parse manifest: %w", err)
 	}
@@ -134,7 +136,7 @@ func verifyAgentPythonArtifact(modulePath, manifestPath string) (*AgentPythonArt
 	if manifest.ArtifactProfile != "base" && manifest.ArtifactProfile != "numpy-core" {
 		return nil, fmt.Errorf("python-reactor: unsupported artifact profile %q", manifest.ArtifactProfile)
 	}
-	if !agentPythonCommitPattern.MatchString(manifest.Build.RepositoryCommit) {
+	if !pythonReactorCommitPattern.MatchString(manifest.Build.RepositoryCommit) {
 		return nil, errors.New("python-reactor: manifest producer commit must be 40 lowercase hex characters")
 	}
 	if manifest.Build.SourceDateEpoch == "" {
@@ -199,7 +201,7 @@ func verifyAgentPythonArtifact(modulePath, manifestPath string) (*AgentPythonArt
 		return nil, fmt.Errorf("python-reactor: expected exactly one agent_runtime_v1.host_call import, got %d", hostCallCount)
 	}
 
-	return &AgentPythonArtifact{
+	return &PythonReactorArtifact{
 		WasmBytes:       wasmBytes,
 		ABI:             "agent-python-runtime/v1",
 		Profile:         manifest.ArtifactProfile,
@@ -214,13 +216,13 @@ func verifyAgentPythonArtifact(modulePath, manifestPath string) (*AgentPythonArt
 	}, nil
 }
 
-type agentPythonRunRequest struct {
+type pythonReactorRunRequest struct {
 	RunID  string         `json:"run_id"`
 	Code   string         `json:"code"`
 	Inputs map[string]any `json:"inputs"`
 }
 
-func verifyShimmyPythonArtifact(modulePath, manifestPath string, manifestBytes []byte) (*AgentPythonArtifact, error) {
+func verifyShimmyPythonArtifact(modulePath, manifestPath string, manifestBytes []byte) (*PythonReactorArtifact, error) {
 	var manifest shimmyPythonManifest
 	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
 		return nil, fmt.Errorf("python-reactor: parse Shimmy producer manifest: %w", err)
@@ -231,7 +233,7 @@ func verifyShimmyPythonArtifact(modulePath, manifestPath string, manifestBytes [
 	if manifest.Target != "wasm32-wasip1" || manifest.ExecutionModel != "reactor" || manifest.IdentityU32 != 0x53505231 {
 		return nil, errors.New("python-reactor: Shimmy producer target, execution model, or identity mismatch")
 	}
-	if manifest.Producer.Project != "shimmy" || manifest.Producer.Dirty || !agentPythonCommitPattern.MatchString(manifest.Producer.Commit) {
+	if manifest.Producer.Project != "shimmy" || manifest.Producer.Dirty || !pythonReactorCommitPattern.MatchString(manifest.Producer.Commit) {
 		return nil, errors.New("python-reactor: Shimmy producer identity is invalid or dirty")
 	}
 	if manifest.SourceDateEpoch <= 0 {
@@ -241,7 +243,7 @@ func verifyShimmyPythonArtifact(modulePath, manifestPath string, manifestBytes [
 		"base": {}, "numpy-core": {"numpy"}, "sympy": {"mpmath", "sympy"},
 	}
 	modules, ok := expectedModules[manifest.Profile]
-	if !ok || !equalAgentPythonStrings(manifest.PythonModules, modules) {
+	if !ok || !equalPythonReactorStrings(manifest.PythonModules, modules) {
 		return nil, fmt.Errorf("python-reactor: manifest python_modules do not match profile %q", manifest.Profile)
 	}
 	if filepath.Base(manifest.Artifact.Name) != manifest.Artifact.Name || manifest.Artifact.Name != filepath.Base(modulePath) {
@@ -288,7 +290,7 @@ func verifyShimmyPythonArtifact(modulePath, manifestPath string, manifestBytes [
 		seenImports[declared] = struct{}{}
 		imports = append(imports, declared)
 	}
-	return &AgentPythonArtifact{
+	return &PythonReactorArtifact{
 		WasmBytes: wasmBytes, ABI: "shimmy-python-runtime/v1", Profile: manifest.Profile,
 		PythonModules:  append([]string(nil), manifest.PythonModules...),
 		ProducerCommit: manifest.Producer.Commit, SHA256: digestHex, ManifestPath: manifestPath,
@@ -297,7 +299,7 @@ func verifyShimmyPythonArtifact(modulePath, manifestPath string, manifestBytes [
 	}, nil
 }
 
-func equalAgentPythonStrings(left, right []string) bool {
+func equalPythonReactorStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
 	}
@@ -309,7 +311,7 @@ func equalAgentPythonStrings(left, right []string) bool {
 	return true
 }
 
-func buildAgentPythonRunRequest(runID, method string, params map[string]any, script string) ([]byte, error) {
+func buildPythonReactorRunRequest(runID, method string, params map[string]any, script string) ([]byte, error) {
 	if runID == "" {
 		return nil, errors.New("python-reactor: run ID is required")
 	}
@@ -320,17 +322,17 @@ func buildAgentPythonRunRequest(runID, method string, params map[string]any, scr
 		params = map[string]any{}
 	}
 	inputs := map[string]any{"method": method, "params": params}
-	code := agentPythonPreparedCall
+	code := pythonReactorPreparedCall
 	if script != "" {
 		inputs["script"] = script
-		code = agentPythonUnpreparedCall
+		code = pythonReactorUnpreparedCall
 	}
-	payload, err := json.Marshal(agentPythonRunRequest{RunID: runID, Code: code, Inputs: inputs})
+	payload, err := json.Marshal(pythonReactorRunRequest{RunID: runID, Code: code, Inputs: inputs})
 	if err != nil {
 		return nil, fmt.Errorf("python-reactor: encode run request: %w", err)
 	}
-	if len(payload) > agentPythonPayloadMax {
-		return nil, fmt.Errorf("python-reactor: run request exceeds %d-byte guest bound", agentPythonPayloadMax)
+	if len(payload) > pythonReactorPayloadMaxBytes {
+		return nil, fmt.Errorf("python-reactor: run request exceeds %d-byte guest bound", pythonReactorPayloadMaxBytes)
 	}
 	return payload, nil
 }
@@ -346,8 +348,8 @@ func buildShimmyPythonRunRequest(method string, params map[string]any) ([]byte, 
 	if err != nil {
 		return nil, fmt.Errorf("python-reactor: encode Shimmy producer request: %w", err)
 	}
-	if len(payload) > agentPythonPayloadMax {
-		return nil, fmt.Errorf("python-reactor: run request exceeds %d-byte guest bound", agentPythonPayloadMax)
+	if len(payload) > pythonReactorPayloadMaxBytes {
+		return nil, fmt.Errorf("python-reactor: run request exceeds %d-byte guest bound", pythonReactorPayloadMaxBytes)
 	}
 	return payload, nil
 }
@@ -368,7 +370,7 @@ func decodeShimmyPythonResponse(payload []byte) (map[string]any, error) {
 	if err := decoder.Decode(&response); err != nil {
 		return nil, fmt.Errorf("python-reactor: decode Shimmy producer response: %w", err)
 	}
-	if err := ensureAgentPythonJSONEOF(decoder); err != nil {
+	if err := ensurePythonReactorJSONEOF(decoder); err != nil {
 		return nil, err
 	}
 	switch response.Status {
@@ -393,7 +395,7 @@ func decodeShimmyPythonResponse(payload []byte) (map[string]any, error) {
 	}
 }
 
-type agentPythonRunResponse struct {
+type pythonReactorRunResponse struct {
 	Status   string            `json:"status"`
 	Result   json.RawMessage   `json:"result"`
 	Receipts []json.RawMessage `json:"receipts"`
@@ -430,14 +432,14 @@ func (e *PythonReactorExecutionError) Error() string {
 	return fmt.Sprintf("python-reactor: %s: %s", e.Code, e.Message)
 }
 
-func decodeAgentPythonResponse(payload []byte) (map[string]any, error) {
+func decodePythonReactorResponse(payload []byte) (map[string]any, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
-	var response agentPythonRunResponse
+	var response pythonReactorRunResponse
 	if err := decoder.Decode(&response); err != nil {
 		return nil, fmt.Errorf("python-reactor: decode response: %w", err)
 	}
-	if err := ensureAgentPythonJSONEOF(decoder); err != nil {
+	if err := ensurePythonReactorJSONEOF(decoder); err != nil {
 		return nil, err
 	}
 	if response.Metrics == nil || (response.Metrics.GuestTimeMS != nil && *response.Metrics.GuestTimeMS < 0) {
@@ -473,7 +475,7 @@ func decodeAgentPythonResponse(payload []byte) (map[string]any, error) {
 	}
 }
 
-func ensureAgentPythonJSONEOF(decoder *json.Decoder) error {
+func ensurePythonReactorJSONEOF(decoder *json.Decoder) error {
 	var trailing any
 	if err := decoder.Decode(&trailing); errors.Is(err, io.EOF) {
 		return nil

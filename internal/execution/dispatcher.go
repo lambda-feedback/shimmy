@@ -69,7 +69,7 @@ func NewDispatcher(params Params) (dispatcher.Dispatcher, error) {
 			return d, nil
 		case "python-reactor":
 			cfg.PythonScriptPath = os.Getenv("FUNCTION_WASM_PYTHON_SCRIPT")
-			d := wasm.NewAgentPythonDispatcher(cfg, params.Log)
+			d := wasm.NewPythonReactorDispatcher(cfg, params.Log)
 			if err := d.Start(params.Context); err != nil {
 				return nil, err
 			}
