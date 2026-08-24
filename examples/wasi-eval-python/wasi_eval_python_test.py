@@ -4,12 +4,12 @@ import pathlib
 import sys
 import unittest
 
-MODULE_PATH = pathlib.Path(__file__).with_name("safe_eval.py")
-SPEC = importlib.util.spec_from_file_location("safe_eval", MODULE_PATH)
+MODULE_PATH = pathlib.Path(__file__).with_name("wasi_eval_python.py")
+SPEC = importlib.util.spec_from_file_location("wasi_eval_python", MODULE_PATH)
 assert SPEC is not None
-SAFE_EVAL = importlib.util.module_from_spec(SPEC)
+WASI_EVAL = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
-SPEC.loader.exec_module(SAFE_EVAL)
+SPEC.loader.exec_module(WASI_EVAL)
 
 LIMITS = {
     "max_code_bytes": 65536,
@@ -24,15 +24,15 @@ def invoke(response, params=None, answer=None, method="eval", limits=None):
         "method": method,
         "payload": {"response": response, "answer": answer, "params": params or {}},
     }
-    return json.loads(SAFE_EVAL.invoke(json.dumps(request), json.dumps(limits or LIMITS)))
+    return json.loads(WASI_EVAL.invoke(json.dumps(request), json.dumps(limits or LIMITS)))
 
 
-class SafeEvalTest(unittest.TestCase):
+class WasiEvalPythonTest(unittest.TestCase):
     def test_reactor_entrypoints_are_directly_callable(self):
-        evaluated = SAFE_EVAL.evaluation_function(
+        evaluated = WASI_EVAL.evaluation_function(
             "print(6 * 7)", "", {"mode": "demo"}
         )
-        previewed = SAFE_EVAL.preview_function("import socket", {})
+        previewed = WASI_EVAL.preview_function("import socket", {})
         self.assertEqual(evaluated["stdout"], "42\n")
         self.assertFalse(previewed["valid"])
 
@@ -45,7 +45,7 @@ class SafeEvalTest(unittest.TestCase):
         self.assertEqual(result["stdout"], "42\n")
 
     def test_execute_preserves_bounded_stderr_on_runtime_error(self):
-        result = SAFE_EVAL._execute(
+        result = WASI_EVAL._execute(
             "print('diagnostic', file=sys.stderr)\nraise RuntimeError('boom')",
             "",
             {"sys": sys},
@@ -109,7 +109,7 @@ class SafeEvalTest(unittest.TestCase):
         self.assertLessEqual(len(result["stdout"].encode()), 32)
 
     def test_output_writer_retains_at_most_the_byte_limit(self):
-        writer = SAFE_EVAL._BoundedTextWriter(31)
+        writer = WASI_EVAL._BoundedTextWriter(31)
         writer.write("λ" * (1024 * 1024))
         self.assertEqual(writer.retained_bytes, 31)
         self.assertTrue(writer.truncated)

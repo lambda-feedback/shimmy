@@ -1,15 +1,15 @@
-# `safe-eval-python` Reactor example
+# `wasiEvalPython` Reactor example
 
-This example provides a small `demo` / `io_test` / `unit_test` evaluator for
-student Python. It is selected at the **Shimmy backend boundary** and runs inside
-the Python Reactor WASM profile; it does not adapt the Linux
-`evaluatePython` implementation and does not start CPython or Node subprocesses.
+`wasiEvalPython` is a small experimental `demo` / `io_test` / `unit_test`
+evaluator for student Python. It runs in-process inside the Python Reactor WASM
+profile, without adapting the Linux `evaluatePython` implementation or starting
+CPython or Node subprocesses.
 
 ```text
 Shimmy HTTP
   → wazero
   → verified Python Reactor artifact
-  → safe_eval.py
+  → wasi_eval_python.py
   → student code
 ```
 
@@ -23,7 +23,7 @@ provenance, and keep them together.
 From the repository root, start the evaluator:
 
 ```bash
-examples/safe-eval-python/serve.sh \
+examples/wasi-eval-python/serve.sh \
   /path/to/shimmy-python-runtime-base.wasm \
   /path/to/manifest.json
 ```
@@ -34,7 +34,7 @@ binary. It requires Bash, Python 3, and curl; Go is only required when the two
 prebuilt Shimmy binaries are not supplied. In another terminal, run the guided examples:
 
 ```bash
-examples/safe-eval-python/try.sh base
+examples/wasi-eval-python/try.sh base
 ```
 
 This sends real HTTP requests for:
@@ -52,16 +52,16 @@ exits non-zero if the running system does not match the documented contract.
 For a richer artifact, use the same flow and name its profile when trying it:
 
 ```bash
-examples/safe-eval-python/serve.sh /path/to/numpy-core.wasm /path/to/manifest.json
-examples/safe-eval-python/try.sh numpy-core
+examples/wasi-eval-python/serve.sh /path/to/numpy-core.wasm /path/to/manifest.json
+examples/wasi-eval-python/try.sh numpy-core
 
-examples/safe-eval-python/serve.sh /path/to/sympy.wasm /path/to/manifest.json
-examples/safe-eval-python/try.sh sympy
+examples/wasi-eval-python/serve.sh /path/to/sympy.wasm /path/to/manifest.json
+examples/wasi-eval-python/try.sh sympy
 ```
 
 The onboarding launcher uses a 5-second worker deadline for `base` and
 `numpy-core`, and 30 seconds for SymPy's heavier first import. Override it with
-`SHIMMY_SAFE_EVAL_TIMEOUT`. These are demonstration defaults, not production
+`SHIMMY_WASI_EVAL_TIMEOUT`. These are demonstration defaults, not production
 SLOs: measure the chosen profile on the deployment platform and set the shortest
 deadline that supports legitimate exercises.
 
@@ -74,14 +74,14 @@ no client SDK is required.
 The smallest useful handoff bundle is:
 
 ```text
-shimmy-safe-eval/
+shimmy-wasi-eval/
 ├── shimmy
 ├── shimmy-artifact-check
 ├── runtime.wasm
 ├── manifest.json
 ├── SHA256SUMS
-└── examples/safe-eval-python/
-    ├── safe_eval.py
+└── examples/wasi-eval-python/
+    ├── wasi_eval_python.py
     ├── serve.sh
     ├── try.sh
     └── requests/
@@ -98,7 +98,7 @@ manifest and provenance receipt.
 | Role | Starts from | Usually changes | Must not control |
 |---|---|---|---|
 | Platform owner | `serve.sh`, artifact, manifest | deployment paths, signatures, memory/concurrency/deadlines | per-request capability expansion |
-| Evaluator author | `safe_eval.py` and its tests | trusted grading modes and fixed limits | artifact provenance or host mounts |
+| Evaluator author | `wasi_eval_python.py` and its tests | trusted grading modes and fixed limits | artifact provenance or host mounts |
 | Exercise author | a file in `requests/` | student starter code, public/hidden tests, expected output | trusted evaluator source or runtime limits |
 | Student/client | HTTP `response` field | submitted Python | tests, manifest, filesystem/network policy |
 
@@ -129,7 +129,7 @@ The Reactor path works within Lambda's normal process constraints:
 - a failed or timed-out snapshot slot is closed and replaced;
 - code, input, test count, and output have explicit evaluator limits.
 
-The AST checks in `safe_eval.py` provide early feedback and reduce accidental
+The AST checks in `wasi_eval_python.py` provide early feedback and reduce accidental
 misuse. They are not claimed as the sandbox. The WASM capability boundary,
 request deadline, memory limit, and state reset are the security controls.
 
@@ -142,7 +142,7 @@ export FUNCTION_INTERFACE=wasm
 export FUNCTION_WASM_PROFILE=python-reactor
 export FUNCTION_WASM_MODULE=/opt/shimmy/runtime/shimmy-python-runtime-base.wasm
 export FUNCTION_WASM_MANIFEST=/opt/shimmy/runtime/shimmy-python-runtime-base.manifest.json
-export FUNCTION_WASM_PYTHON_SCRIPT="$PWD/examples/safe-eval-python/safe_eval.py"
+export FUNCTION_WASM_PYTHON_SCRIPT="$PWD/examples/wasi-eval-python/wasi_eval_python.py"
 export FUNCTION_WASM_PYTHON_LIFECYCLE=snapshot
 export FUNCTION_WASM_ALLOWED_PATHS=
 export FUNCTION_MAX_PROCS=1
@@ -251,7 +251,7 @@ loops and long enough for the selected profile's normal work.
 Host-side behavior tests:
 
 ```bash
-python3 -m unittest examples/safe-eval-python/safe_eval_test.py -v
+python3 -m unittest examples/wasi-eval-python/wasi_eval_python_test.py -v
 ```
 
 Full Linux path with a real Producer artifact:
@@ -259,7 +259,7 @@ Full Linux path with a real Producer artifact:
 ```bash
 SHIMMY_PYTHON_REACTOR_WASM=/path/to/base.wasm \
 SHIMMY_PYTHON_REACTOR_MANIFEST=/path/to/base.manifest.json \
-scripts/e2e-safe-eval-python.sh
+scripts/e2e-wasi-eval-python.sh
 ```
 
 The E2E covers all three modes, preview rejection, timeout of an infinite loop,

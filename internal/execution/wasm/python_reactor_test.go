@@ -437,9 +437,9 @@ func TestRestorePythonReactorSnapshotRejectsMemoryGrowth(t *testing.T) {
 func TestPythonReactorDispatcherProducerTimeoutReturnsBeforeSnapshotRefill(t *testing.T) {
 	wasmPath := os.Getenv("SHIMMY_PYTHON_RUNTIME_WASM")
 	manifestPath := os.Getenv("SHIMMY_PYTHON_RUNTIME_MANIFEST")
-	evaluatorPath := os.Getenv("SAFE_EVAL_PYTHON_SCRIPT")
+	evaluatorPath := os.Getenv("WASI_EVAL_PYTHON_SCRIPT")
 	if wasmPath == "" || manifestPath == "" || evaluatorPath == "" {
-		t.Skip("SHIMMY_PYTHON_RUNTIME_WASM, SHIMMY_PYTHON_RUNTIME_MANIFEST, and SAFE_EVAL_PYTHON_SCRIPT are required")
+		t.Skip("SHIMMY_PYTHON_RUNTIME_WASM, SHIMMY_PYTHON_RUNTIME_MANIFEST, and WASI_EVAL_PYTHON_SCRIPT are required")
 	}
 
 	dispatcher := NewPythonReactorDispatcher(Config{

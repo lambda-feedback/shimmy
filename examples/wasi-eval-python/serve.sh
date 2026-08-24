@@ -4,23 +4,23 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WASM="${1:-${SHIMMY_PYTHON_REACTOR_WASM:-}}"
 MANIFEST="${2:-${SHIMMY_PYTHON_REACTOR_MANIFEST:-}}"
-PORT="${SHIMMY_SAFE_EVAL_PORT:-8080}"
-HOST="${SHIMMY_SAFE_EVAL_HOST:-127.0.0.1}"
-EVALUATOR="${SHIMMY_SAFE_EVAL_EVALUATOR:-${ROOT}/examples/safe-eval-python/safe_eval.py}"
+PORT="${SHIMMY_WASI_EVAL_PORT:-8080}"
+HOST="${SHIMMY_WASI_EVAL_HOST:-127.0.0.1}"
+EVALUATOR="${SHIMMY_WASI_EVAL_EVALUATOR:-${ROOT}/examples/wasi-eval-python/wasi_eval_python.py}"
 
 usage() {
   cat >&2 <<'EOF'
 Usage:
-  examples/safe-eval-python/serve.sh /path/to/runtime.wasm /path/to/manifest.json
+  examples/wasi-eval-python/serve.sh /path/to/runtime.wasm /path/to/manifest.json
 
 Or set:
   SHIMMY_PYTHON_REACTOR_WASM=/path/to/runtime.wasm
   SHIMMY_PYTHON_REACTOR_MANIFEST=/path/to/manifest.json
 
 Optional:
-  SHIMMY_SAFE_EVAL_HOST=127.0.0.1
-  SHIMMY_SAFE_EVAL_PORT=8080
-  SHIMMY_SAFE_EVAL_TIMEOUT=10s  # optional; profile-aware default otherwise
+  SHIMMY_WASI_EVAL_HOST=127.0.0.1
+  SHIMMY_WASI_EVAL_PORT=8080
+  SHIMMY_WASI_EVAL_TIMEOUT=10s  # optional; profile-aware default otherwise
   SHIMMY_BIN=/path/to/shimmy
   SHIMMY_ARTIFACT_CHECK_BIN=/path/to/shimmy-artifact-check
 EOF
@@ -65,13 +65,13 @@ case "${ARTIFACT_PROFILE}" in
   sympy) DEFAULT_TIMEOUT=30s ;;
   *) echo "unsupported Python Reactor profile in manifest: ${ARTIFACT_PROFILE:-<missing>}" >&2; exit 2 ;;
 esac
-WORKER_TIMEOUT="${SHIMMY_SAFE_EVAL_TIMEOUT:-${DEFAULT_TIMEOUT}}"
+WORKER_TIMEOUT="${SHIMMY_WASI_EVAL_TIMEOUT:-${DEFAULT_TIMEOUT}}"
 
 echo
-echo "safe-eval-python (${ARTIFACT_PROFILE}) is starting at http://${HOST}:${PORT}"
+echo "wasi-eval-python (${ARTIFACT_PROFILE}) is starting at http://${HOST}:${PORT}"
 echo "onboarding worker deadline: ${WORKER_TIMEOUT}"
 echo "In another terminal run:"
-echo "  examples/safe-eval-python/try.sh ${ARTIFACT_PROFILE} http://${HOST}:${PORT}"
+echo "  examples/wasi-eval-python/try.sh ${ARTIFACT_PROFILE} http://${HOST}:${PORT}"
 echo
 
 exec env \

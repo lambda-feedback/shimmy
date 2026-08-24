@@ -1,3 +1,8 @@
+"""Restricted in-process Python evaluator for the Shimmy Python Reactor.
+
+The Wasm runtime, not the AST policy in this module, is the security boundary.
+"""
+
 from __future__ import annotations
 
 import ast

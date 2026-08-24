@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-REQUESTS="${ROOT}/examples/safe-eval-python/requests"
+REQUESTS="${ROOT}/examples/wasi-eval-python/requests"
 PROFILE="${1:-base}"
 BASE_URL="${2:-http://127.0.0.1:8080}"
 CURL_TIMEOUT=15

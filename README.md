@@ -207,7 +207,7 @@ Generic WASM and Python Reactor are explicit opt-in execution paths. See
 lifecycle behavior, and compatibility boundaries.
 
 To try Python Reactor without assembling requests by hand, follow the
-[`safe-eval-python` three-command quick start](examples/safe-eval-python/README.md#start-here-first-successful-evaluation).
+[`wasi-eval-python` three-command quick start](examples/wasi-eval-python/README.md#start-here-first-successful-evaluation).
 It includes runnable base, NumPy, and SymPy fixtures plus both passing and
 failing student-code examples.
 

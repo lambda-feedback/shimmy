@@ -4,9 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WASM="${SHIMMY_PYTHON_REACTOR_WASM:?set SHIMMY_PYTHON_REACTOR_WASM to a Producer base artifact}"
 MANIFEST="${SHIMMY_PYTHON_REACTOR_MANIFEST:?set SHIMMY_PYTHON_REACTOR_MANIFEST to its manifest.json}"
-EVALUATOR="${SHIMMY_SAFE_EVAL_EVALUATOR:-${ROOT}/examples/safe-eval-python/safe_eval.py}"
+EVALUATOR="${SHIMMY_WASI_EVAL_EVALUATOR:-${ROOT}/examples/wasi-eval-python/wasi_eval_python.py}"
 HOST=127.0.0.1
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/shimmy-safe-eval-python-e2e.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/shimmy-wasi-eval-python-e2e.XXXXXX")"
 PORT="${SHIMMY_E2E_PORT:-}"
 BIN="${SHIMMY_E2E_BIN:-${TMP}/shimmy}"
 CHECK="${SHIMMY_E2E_ARTIFACT_CHECK_BIN:-${TMP}/shimmy-artifact-check}"
@@ -27,7 +27,7 @@ trap cleanup EXIT
 for cmd in curl python3; do
   command -v "${cmd}" >/dev/null 2>&1 || { echo "missing required command: ${cmd}" >&2; exit 1; }
 done
-[[ "$(uname -s)" == "Linux" ]] || { echo "safeEvalPython Reactor E2E requires Linux" >&2; exit 1; }
+[[ "$(uname -s)" == "Linux" ]] || { echo "wasiEvalPython Reactor E2E requires Linux" >&2; exit 1; }
 [[ -r "${WASM}" && -r "${MANIFEST}" && -r "${EVALUATOR}" ]] || { echo "artifact, manifest, and evaluator must be readable" >&2; exit 1; }
 
 if [[ -z "${PORT}" ]]; then
@@ -168,4 +168,4 @@ PY
 echo "timeout_recovery_attempts=${RECOVERY_ATTEMPTS}"
 
 echo "timeout_recovery=PASS"
-echo "safe_eval_python_reactor_e2e=PASS"
+echo "wasi_eval_python_reactor_e2e=PASS"

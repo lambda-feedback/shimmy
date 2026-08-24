@@ -93,10 +93,10 @@ SHIMMY_PYTHON_REACTOR_MANIFEST=/opt/runtime/manifest.json \
 The check starts Shimmy, sends two `eval` requests and one `preview` request,
 and verifies prepared-state restoration between requests.
 
-## Safe Python evaluator example
+## `wasiEvalPython` evaluator example
 
-[`examples/safe-eval-python`](../examples/safe-eval-python/README.md) is a
-backend-level Python Reactor example for student Python in `demo`, `io_test`,
+[`examples/wasi-eval-python`](../examples/wasi-eval-python/README.md) contains the
+experimental `wasiEvalPython` evaluator for student Python in `demo`, `io_test`,
 `unit_test`, and `preview` modes. It uses:
 
 - wazero's WebAssembly capability boundary;
@@ -112,11 +112,11 @@ depth; they are not a containment boundary.
 ```bash
 SHIMMY_PYTHON_REACTOR_WASM=/path/to/base.wasm \
 SHIMMY_PYTHON_REACTOR_MANIFEST=/path/to/base.manifest.json \
-  scripts/e2e-safe-eval-python.sh
+  scripts/e2e-wasi-eval-python.sh
 ```
 
 For the guided base, NumPy, and SymPy examples, follow the
-[quick start](../examples/safe-eval-python/README.md#start-here-first-successful-evaluation).
+[quick start](../examples/wasi-eval-python/README.md#start-here-first-successful-evaluation).
 
 ## Security boundary
 
