@@ -50,13 +50,8 @@ type Config struct {
 
 	// PythonScriptPath is the host path to the trusted Python evaluation script.
 	// Used by Python Reactor and the independent resident Python compatibility path.
-	// Python Reactor scripts must define dispatch(method, payload).
+	// Python React...[truncated]
 	PythonScriptPath string `conf:"wasm_python_script"`
-
-	// PythonPreloadMode controls whether Python Reactor passes the trusted evaluator
-	// through runtime_prepare. "evaluator" is the default; "off" executes the
-	// trusted script in each fresh request namespace.
-	PythonPreloadMode string `conf:"wasm_python_preload"`
 
 	// PythonLifecycle selects whether Python Reactor modules are initialized for
 	// every request, consumed once from a prepared pool, or restored to their
@@ -76,6 +71,10 @@ type Config struct {
 	// It is separate from the per-request timeout because large artifacts may import
 	// modules slowly during preparation while requests should remain tightly bounded.
 	PythonPrepareTimeout time.Duration `conf:"wasm_python_prepare_timeout"`
+
+	// PythonPayloadMaxBytes is the operator-selected Host/Guest frame limit.
+	// It may tighten, but never exceed, the physical artifact contract.
+	PythonPayloadMaxBytes uint32 `conf:"wasm_python_max_payload_bytes"`
 
 	// CompileCacheDir, if non-empty, enables wazero's on-disk compilation cache.
 	// Set via FUNCTION_WASM_COMPILE_CACHE env var. Shared across all runners and
@@ -97,18 +96,6 @@ func (c *Config) applyDefaults() {
 	if c.MaxMemoryPages == 0 {
 		c.MaxMemoryPages = 256 // 16 MB
 	}
-	if c.PythonPreloadMode == "" {
-		c.PythonPreloadMode = "evaluator"
-	}
-}
-
-func (c *Config) validatePythonPreloadMode() error {
-	switch c.PythonPreloadMode {
-	case "evaluator", "off":
-		return nil
-	default:
-		return fmt.Errorf("python preload mode %q is invalid; use \"evaluator\" or \"off\"", c.PythonPreloadMode)
-	}
 }
 
 func (c *Config) applyPythonReactorDefaults() {
@@ -124,6 +111,9 @@ func (c *Config) applyPythonReactorDefaults() {
 	if c.PythonPrepareTimeout == 0 {
 		c.PythonPrepareTimeout = 2 * time.Minute
 	}
+	if c.PythonPayloadMaxBytes == 0 {
+		c.PythonPayloadMaxBytes = pythonReactorPayloadMaxBytes
+	}
 }
 
 func (c *Config) validatePythonReactorLifecycle() error {
@@ -137,6 +127,9 @@ func (c *Config) validatePythonReactorLifecycle() error {
 	}
 	if c.MaxInstances > 4 {
 		return fmt.Errorf("Python Reactor max instances %d exceeds the supported limit 4", c.MaxInstances)
+	}
+	if c.PythonPayloadMaxBytes > pythonReactorPayloadMaxBytes {
+		return fmt.Errorf("Python Reactor payload limit %d exceeds the artifact contract limit %d", c.PythonPayloadMaxBytes, pythonReactorPayloadMaxBytes)
 	}
 	return nil
 }
@@ -167,9 +160,7 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("FUNCTION_WASM_PYTHON_SCRIPT"); v != "" {
 		c.PythonScriptPath = v
 	}
-	if v := os.Getenv("FUNCTION_WASM_PYTHON_PRELOAD"); v != "" {
-		c.PythonPreloadMode = v
-	}
+
 	if v := os.Getenv("FUNCTION_WASM_PYTHON_LIFECYCLE"); v != "" {
 		c.PythonLifecycle = strings.TrimSpace(v)
 	}
@@ -186,6 +177,11 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("FUNCTION_WASM_PYTHON_PREPARE_TIMEOUT"); v != "" {
 		if timeout, err := time.ParseDuration(v); err == nil && timeout > 0 {
 			c.PythonPrepareTimeout = timeout
+		}
+	}
+	if v := os.Getenv("FUNCTION_WASM_PYTHON_MAX_PAYLOAD_BYTES"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 32); err == nil && n > 0 {
+			c.PythonPayloadMaxBytes = uint32(n)
 		}
 	}
 

@@ -149,13 +149,7 @@ func (d *PythonReactorDispatcher) Start(ctx context.Context) error {
 			d.cfg.MaxInstances = 1
 		}
 	}
-	if d.cfg.PythonPreloadMode == "" {
-		d.cfg.PythonPreloadMode = "evaluator"
-	}
 	d.cfg.applyPythonReactorDefaults()
-	if err := d.cfg.validatePythonPreloadMode(); err != nil {
-		return fmt.Errorf("python-reactor: %w", err)
-	}
 	if err := d.cfg.validatePythonReactorLifecycle(); err != nil {
 		return fmt.Errorf("python-reactor: %w", err)
 	}
@@ -169,8 +163,8 @@ func (d *PythonReactorDispatcher) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("python-reactor: read script %q: %w", d.cfg.PythonScriptPath, err)
 	}
-	if len(scriptBytes) == 0 || len(scriptBytes) > pythonReactorPayloadMaxBytes {
-		return fmt.Errorf("python-reactor: trusted script size %d is outside the 1 MiB guest bound", len(scriptBytes))
+	if len(scriptBytes) == 0 || uint64(len(scriptBytes)) > uint64(d.cfg.PythonPayloadMaxBytes) {
+		return fmt.Errorf("python-reactor: trusted script size %d is outside the %d-byte operator limit", len(scriptBytes), d.cfg.PythonPayloadMaxBytes)
 	}
 
 	phaseStart := time.Now()
@@ -181,9 +175,6 @@ func (d *PythonReactorDispatcher) Start(ctx context.Context) error {
 	})
 	if err != nil {
 		return err
-	}
-	if artifact.ABI == "shimmy-python-runtime/v1" && d.cfg.PythonPreloadMode == "off" {
-		return errors.New("python-reactor: Shimmy producer ABI requires prepared evaluator preload")
 	}
 
 	runtimeConfig := wazero.NewRuntimeConfig().
@@ -219,20 +210,6 @@ func (d *PythonReactorDispatcher) Start(ctx context.Context) error {
 	if err != nil {
 		closePartial()
 		return fmt.Errorf("python-reactor: instantiate WASI imports: %w", err)
-	}
-	phaseStart = time.Now()
-	_, err = wasmRuntime.NewHostModuleBuilder("agent_runtime_v1").
-		NewFunctionBuilder().
-		WithFunc(pythonReactorDeniedHostCall).
-		Export("host_call").
-		Instantiate(ctx)
-	d.observePythonReactorPhase(PythonReactorPhaseObservation{
-		Phase: PythonReactorPhaseHostImports, Purpose: PythonReactorPurposeStartup,
-		Started: phaseStart, Outcome: pythonReactorPhaseOutcome(err), Err: err,
-	})
-	if err != nil {
-		closePartial()
-		return fmt.Errorf("python-reactor: instantiate Host imports: %w", err)
 	}
 	phaseStart = time.Now()
 	compiled, err := wasmRuntime.CompileModule(ctx, artifact.WasmBytes)
@@ -347,18 +324,7 @@ func (d *PythonReactorDispatcher) Send(ctx context.Context, method string, param
 	}
 
 	requestID := d.runCounter.Add(1)
-	var request []byte
-	var err error
-	if d.artifact.ABI == "shimmy-python-runtime/v1" {
-		request, err = buildShimmyPythonRunRequest(method, params)
-	} else {
-		runID := fmt.Sprintf("shimmy-%s-%d", d.artifact.SHA256[:12], requestID)
-		scriptInRequest := ""
-		if d.cfg.PythonPreloadMode == "off" {
-			scriptInRequest = d.script
-		}
-		request, err = buildPythonReactorRunRequest(runID, method, params, scriptInRequest)
-	}
+	request, err := buildShimmyPythonRunRequest(method, params, d.cfg.PythonPayloadMaxBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +387,7 @@ func (d *PythonReactorDispatcher) Send(ctx context.Context, method string, param
 	}
 
 	phaseStart := time.Now()
-	payload, callErr := callPythonReactorExecute(runContext, slot.module, d.artifact.ExecuteExport, request)
+	payload, callErr := callPythonReactorExecute(runContext, slot.module, d.artifact.ExecuteExport, request, d.cfg.PythonPayloadMaxBytes)
 	if callErr != nil && runContext.Err() != nil {
 		callErr = errors.Join(callErr, runContext.Err())
 	}
@@ -457,12 +423,7 @@ func (d *PythonReactorDispatcher) Send(ctx context.Context, method string, param
 		return nil, withPythonReactorDiagnostic(callErr, slot.diagnostic.String())
 	}
 	phaseStart = time.Now()
-	var result map[string]any
-	if d.artifact.ABI == "shimmy-python-runtime/v1" {
-		result, err = decodeShimmyPythonResponse(payload)
-	} else {
-		result, err = decodePythonReactorResponse(payload)
-	}
+	result, err := decodeShimmyPythonResponse(payload)
 	d.observePythonReactorPhase(PythonReactorPhaseObservation{
 		Phase: PythonReactorPhaseDecode, Purpose: PythonReactorPurposeRequest,
 		RequestID: requestID, SlotID: slot.id, Started: phaseStart,
@@ -546,7 +507,6 @@ func (d *PythonReactorDispatcher) tryBeginSend() bool {
 
 func (d *PythonReactorDispatcher) newInitializedModule(
 	ctx context.Context,
-	prepare bool,
 	purpose PythonReactorPurpose,
 	requestID uint64,
 	slotID uint64,
@@ -585,13 +545,9 @@ func (d *PythonReactorDispatcher) newInitializedModule(
 		return nil, diagnostic, err
 	}
 	phaseStart = time.Now()
-	if d.artifact.ABI == "shimmy-python-runtime/v1" {
-		err = callPythonReactorNoArgsValue(ctx, module, "shimmy_python_runtime_identity", 0x53505231)
-		if err == nil {
-			err = callPythonReactorNoArgsValue(ctx, module, d.artifact.InitExport, 0)
-		}
-	} else {
-		err = callPythonReactorStatus(ctx, module, d.artifact.InitExport, []byte("{}"))
+	err = callPythonReactorNoArgsValue(ctx, module, "shimmy_python_runtime_identity", 0x53505231)
+	if err == nil {
+		err = callPythonReactorNoArgsValue(ctx, module, d.artifact.InitExport, 0)
 	}
 	d.observePythonReactorPhase(PythonReactorPhaseObservation{
 		Phase: PythonReactorPhaseRuntimeInit, Purpose: purpose, RequestID: requestID, SlotID: slotID,
@@ -600,16 +556,14 @@ func (d *PythonReactorDispatcher) newInitializedModule(
 	if err != nil {
 		return nil, diagnostic, err
 	}
-	if prepare {
-		phaseStart = time.Now()
-		err = callPythonReactorStatus(ctx, module, d.artifact.PrepareExport, []byte(d.script))
-		d.observePythonReactorPhase(PythonReactorPhaseObservation{
-			Phase: PythonReactorPhaseRuntimePrepare, Purpose: purpose, RequestID: requestID, SlotID: slotID,
-			Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: pythonReactorPhaseOutcome(err), Err: err,
-		})
-		if err != nil {
-			return nil, diagnostic, err
-		}
+	phaseStart = time.Now()
+	err = callPythonReactorStatus(ctx, module, d.artifact.PrepareExport, []byte(d.script), d.cfg.PythonPayloadMaxBytes)
+	d.observePythonReactorPhase(PythonReactorPhaseObservation{
+		Phase: PythonReactorPhaseRuntimePrepare, Purpose: purpose, RequestID: requestID, SlotID: slotID,
+		Started: phaseStart, MemoryBytes: uint64(module.Memory().Size()), Outcome: pythonReactorPhaseOutcome(err), Err: err,
+	})
+	if err != nil {
+		return nil, diagnostic, err
 	}
 	diagnostic.Reset()
 	failed = false
@@ -675,13 +629,7 @@ func (d *PythonReactorDispatcher) newPreparedModuleSlot(
 	requestID uint64,
 ) (*pythonReactorModuleSlot, error) {
 	slotID := d.slotCounter.Add(1)
-	module, diagnostic, err := d.newInitializedModule(
-		ctx,
-		d.cfg.PythonPreloadMode != "off",
-		purpose,
-		requestID,
-		slotID,
-	)
+	module, diagnostic, err := d.newInitializedModule(ctx, purpose, requestID, slotID)
 	if err != nil {
 		return nil, withPythonReactorDiagnostic(err, diagnostic.String())
 	}
@@ -896,10 +844,6 @@ preparedClosed:
 	return errors.Join(slotErr, compiledErr, runtimeErr, cacheErr)
 }
 
-func pythonReactorDeniedHostCall(context.Context, api.Module, uint32, uint32, uint32, uint32) int32 {
-	return -1
-}
-
 func callPythonReactorNoArgs(ctx context.Context, module api.Module, name string) error {
 	function := module.ExportedFunction(name)
 	if function == nil {
@@ -926,8 +870,8 @@ func callPythonReactorNoArgsValue(ctx context.Context, module api.Module, name s
 	return nil
 }
 
-func callPythonReactorStatus(ctx context.Context, module api.Module, name string, data []byte) error {
-	results, release, err := callPythonReactorWithBytes(ctx, module, name, data)
+func callPythonReactorStatus(ctx context.Context, module api.Module, name string, data []byte, maxBytes uint32) error {
+	results, release, err := callPythonReactorWithBytes(ctx, module, name, data, maxBytes)
 	if release != nil {
 		defer release()
 	}
@@ -940,11 +884,11 @@ func callPythonReactorStatus(ctx context.Context, module api.Module, name string
 	return nil
 }
 
-func callPythonReactorExecute(ctx context.Context, module api.Module, name string, request []byte) ([]byte, error) {
+func callPythonReactorExecute(ctx context.Context, module api.Module, name string, request []byte, maxBytes uint32) ([]byte, error) {
 	if name == "" {
 		name = "execute"
 	}
-	results, release, err := callPythonReactorWithBytes(ctx, module, name, request)
+	results, release, err := callPythonReactorWithBytes(ctx, module, name, request, maxBytes)
 	if release != nil {
 		defer release()
 	}
@@ -954,12 +898,12 @@ func callPythonReactorExecute(ctx context.Context, module api.Module, name strin
 	if len(results) != 1 {
 		return nil, errors.New("python-reactor: execute returned an unexpected result count")
 	}
-	return readPythonReactorResponse(module.Memory(), uint32(results[0]))
+	return readPythonReactorResponse(module.Memory(), uint32(results[0]), maxBytes)
 }
 
-func callPythonReactorWithBytes(ctx context.Context, module api.Module, name string, data []byte) ([]uint64, func(), error) {
-	if len(data) == 0 || len(data) > pythonReactorPayloadMaxBytes || len(data) > math.MaxUint32 {
-		return nil, nil, fmt.Errorf("python-reactor: %s input size %d is outside the guest bound", name, len(data))
+func callPythonReactorWithBytes(ctx context.Context, module api.Module, name string, data []byte, maxBytes uint32) ([]uint64, func(), error) {
+	if len(data) == 0 || uint64(len(data)) > uint64(maxBytes) || len(data) > math.MaxUint32 {
+		return nil, nil, fmt.Errorf("python-reactor: %s input size %d is outside the %d-byte operator limit", name, len(data), maxBytes)
 	}
 	allocate := module.ExportedFunction("alloc")
 	deallocate := module.ExportedFunction("dealloc")
@@ -994,7 +938,7 @@ func callPythonReactorWithBytes(ctx context.Context, module api.Module, name str
 	return results, release, nil
 }
 
-func readPythonReactorResponse(memory api.Memory, pointer uint32) ([]byte, error) {
+func readPythonReactorResponse(memory api.Memory, pointer uint32, maxBytes uint32) ([]byte, error) {
 	if memory == nil {
 		return nil, errors.New("python-reactor: guest module has no linear memory")
 	}
@@ -1003,8 +947,8 @@ func readPythonReactorResponse(memory api.Memory, pointer uint32) ([]byte, error
 		return nil, errors.New("python-reactor: response length prefix is out of bounds")
 	}
 	length := binary.LittleEndian.Uint32(header)
-	if length > pythonReactorPayloadMaxBytes {
-		return nil, fmt.Errorf("python-reactor: response payload length %d exceeds limit %d", length, pythonReactorPayloadMaxBytes)
+	if length > maxBytes {
+		return nil, fmt.Errorf("python-reactor: response payload length %d exceeds operator limit %d", length, maxBytes)
 	}
 	if uint64(pointer)+4+uint64(length) > uint64(memory.Size()) {
 		return nil, errors.New("python-reactor: response frame is out of bounds")

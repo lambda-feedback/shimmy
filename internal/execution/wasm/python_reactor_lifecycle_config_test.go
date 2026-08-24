@@ -17,6 +17,7 @@ func TestPythonReactorLifecycleDefaultsToSnapshotMemcpy(t *testing.T) {
 	assert.Equal(t, 1, cfg.PythonPreparedCapacity)
 	assert.Equal(t, uint64(8*1024*1024), cfg.PythonSnapshotHeadroomBytes)
 	assert.Equal(t, 2*time.Minute, cfg.PythonPrepareTimeout)
+	assert.Equal(t, uint32(1024*1024), cfg.PythonPayloadMaxBytes)
 	require.NoError(t, cfg.validatePythonReactorLifecycle())
 }
 
@@ -27,6 +28,23 @@ func TestPythonReactorPrepareTimeoutReadsEnvironment(t *testing.T) {
 	cfg.applyPythonReactorDefaults()
 
 	assert.Equal(t, 3*time.Minute+30*time.Second, cfg.PythonPrepareTimeout)
+}
+
+func TestPythonReactorPayloadLimitReadsEnvironment(t *testing.T) {
+	t.Setenv("FUNCTION_WASM_PYTHON_MAX_PAYLOAD_BYTES", "262144")
+	cfg := Config{}
+	cfg.applyEnv()
+	cfg.applyPythonReactorDefaults()
+
+	assert.Equal(t, uint32(262144), cfg.PythonPayloadMaxBytes)
+	require.NoError(t, cfg.validatePythonReactorLifecycle())
+}
+
+func TestPythonReactorPayloadLimitRejectsValueAboveArtifactContract(t *testing.T) {
+	cfg := Config{PythonPayloadMaxBytes: 1024*1024 + 1}
+	cfg.applyPythonReactorDefaults()
+
+	require.ErrorContains(t, cfg.validatePythonReactorLifecycle(), "payload limit")
 }
 
 func TestPythonReactorLifecycleReadsExplicitSingleUseCapacity(t *testing.T) {

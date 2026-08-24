@@ -36,7 +36,10 @@ FUNCTION_WASM_PYTHON_SCRIPT=/opt/evaluator/evaluator.py
 FUNCTION_WASM_PYTHON_LIFECYCLE=snapshot
 ```
 
-The prepared trusted script owns `dispatch(method, payload)`. Shimmy verifies
+The prepared trusted script defines `evaluation_function(response, answer, params)`
+and may define `preview_function(response, params)`. Artifacts are built
+from the self-contained producer under `build/python-reactor/producer/` and use
+the `shimmy-python-runtime/v1` ABI. Shimmy verifies
 the following before serving requests:
 
 - artifact SHA-256 against the manifest;
@@ -64,8 +67,12 @@ fallbacks. Shimmy never changes lifecycle after a request fails.
 Preparation and background refill use a separate two-minute deadline so slow
 artifact imports do not widen request deadlines. Override it with
 `FUNCTION_WASM_PYTHON_PREPARE_TIMEOUT`; request execution remains controlled by
-`FUNCTION_WORKER_SEND_TIMEOUT`. The linear-memory ceiling remains configurable
-with `FUNCTION_WASM_MAX_MEMORY_PAGES`.
+`FUNCTION_WORKER_SEND_TIMEOUT`. `FUNCTION_WASM_PYTHON_MAX_PAYLOAD_BYTES` may
+tighten the default 1 MiB Host/Guest frame limit for a deployment, but cannot
+exceed the physical limit declared by the `shimmy-python-runtime/v1` artifact.
+Raising that ceiling requires a matching Producer artifact and contract update,
+not only a Host setting. The linear-memory ceiling remains configurable with
+`FUNCTION_WASM_MAX_MEMORY_PAGES`.
 
 Python Reactor does not expose host paths. Leave
 `FUNCTION_WASM_ALLOWED_PATHS` unset. Runtime modules are selected by the
