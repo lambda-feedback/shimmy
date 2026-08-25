@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/urfave/cli/v2"
@@ -47,7 +48,7 @@ functions on arbitrary, serverless platforms.`
 			&cli.StringFlag{
 				Name:     "interface",
 				Aliases:  []string{"i"},
-				Usage:    "the interface to use for worker process communication. Options: rpc, file.",
+				Usage:    "the interface to use for worker communication. Options: rpc, file, wasm.",
 				Value:    "rpc",
 				Category: "function",
 				EnvVars:  []string{"FUNCTION_INTERFACE"},
@@ -55,10 +56,9 @@ functions on arbitrary, serverless platforms.`
 			&cli.StringFlag{
 				Name:     "command",
 				Aliases:  []string{"c"},
-				Usage:    "the command to invoke to start the worker process.",
+				Usage:    "the command to invoke to start the worker process, or the WASM module path when --interface=wasm.",
 				Category: "function",
 				EnvVars:  []string{"FUNCTION_COMMAND"},
-				Required: true,
 			},
 			&cli.StringFlag{
 				Name:     "cwd",
@@ -360,6 +360,22 @@ func parseRootConfig(ctx *cli.Context) (config.Config, error) {
 	if err != nil {
 		return config.Config{}, err
 	}
+	if err := validateRootConfig(cfg, os.Getenv("FUNCTION_WASM_MODULE")); err != nil {
+		return config.Config{}, err
+	}
 
-	return cfg, err
+	return cfg, nil
+}
+
+func validateRootConfig(cfg config.Config, wasmModule string) error {
+	if strings.TrimSpace(cfg.Runtime.Supervisor.StartParams.Cmd) != "" {
+		return nil
+	}
+	if cfg.Runtime.Supervisor.IO.Interface == "wasm" {
+		if strings.TrimSpace(wasmModule) != "" {
+			return nil
+		}
+		return fmt.Errorf("wasm interface requires --command or FUNCTION_WASM_MODULE")
+	}
+	return fmt.Errorf("%s interface requires --command", cfg.Runtime.Supervisor.IO.Interface)
 }
