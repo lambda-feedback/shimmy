@@ -1,12 +1,10 @@
 package supervisor
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"sync"
@@ -164,15 +162,15 @@ func (a *fileAdapter) Send(
 	)
 
 	// create the worker with modified args and env
-	worker, err := a.workerFactory(startParams)
+	childWorker, err := a.workerFactory(startParams)
 	if err != nil {
 		return nil, fmt.Errorf("error creating worker: %w", err)
 	}
 
 	// store worker for later use
-	a.worker = worker
+	a.worker = childWorker
 
-	pipe, err := worker.ReadPipe()
+	pipe, err := childWorker.ReadPipe()
 	if err != nil {
 		return nil, fmt.Errorf("error getting read pipe: %w", err)
 	}
@@ -183,26 +181,19 @@ func (a *fileAdapter) Send(
 	go func() {
 		defer stdoutWg.Done()
 
-		// capture stdout
-		var buf bytes.Buffer
-		_, err := io.Copy(&buf, pipe)
-		if err != nil && err != io.EOF {
-			a.log.Warn("failed to read from stdout",
-				zap.String("data", buf.String()),
-				zap.Error(err),
-			)
+		if err := worker.LogPipe(a.log, "stdout", pipe); err != nil {
+			a.log.Warn("failed to read from stdout", zap.Error(err))
 		}
-		a.log.Debug("stdout", zap.String("data", buf.String()))
 	}()
 
-	if err := worker.Start(ctx); err != nil {
+	if err := childWorker.Start(ctx); err != nil {
 		return nil, fmt.Errorf("error starting process: %w", err)
 	}
 
 	stdoutWg.Wait()
 
 	// wait for worker to terminate (find another way to read res earlier?)
-	exitEvent, err := worker.Wait(ctx)
+	exitEvent, err := childWorker.Wait(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error waiting for process: %w", err)
 	}
