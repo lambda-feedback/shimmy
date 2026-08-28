@@ -32,5 +32,5 @@ func New(ctx *cli.Context) (*shell.Shell, error) {
 		runtime.Module(config.Runtime),
 	)
 
-	return shell.New(log, appModule), nil
+	return shell.New(log, config.StartTimeout, appModule), nil
 }

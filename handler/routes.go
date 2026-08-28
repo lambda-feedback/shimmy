@@ -13,11 +13,3 @@ func NewLegacyRoute(handler *CommandHandler) server.HttpHandlerResult {
 func NewHealthRoute() server.HttpHandlerResult {
 	return server.AsHttpHandler("/health", http.HandlerFunc(HealthHandler))
 }
-
-func NewMuEdEvaluateRoute(handler *MuEdHandler) server.HttpHandlerResult {
-	return server.AsHttpHandler("/evaluate", http.HandlerFunc(handler.ServeEvaluate))
-}
-
-func NewMuEdEvaluateHealthRoute(handler *MuEdHandler) server.HttpHandlerResult {
-	return server.AsHttpHandler("/evaluate/health", http.HandlerFunc(handler.ServeHealth))
-}

@@ -86,8 +86,9 @@ GLOBAL OPTIONS:
 
    worker
 
-   --worker-send-timeout value  the timeout for a single message send operation. (default: 30s) [$FUNCTION_WORKER_SEND_TIMEOUT]
-   --worker-stop-timeout value  the duration to wait for a worker process to stop. (default: 5s) [$FUNCTION_WORKER_STOP_TIMEOUT]
+   --worker-send-timeout value   the timeout for a single message send operation. (default: 30s) [$FUNCTION_WORKER_SEND_TIMEOUT]
+   --worker-start-timeout value  the duration to wait for the application to start (worker process boot + first successful RPC dial). (default: 15s) [$FUNCTION_WORKER_START_TIMEOUT]
+   --worker-stop-timeout value   the duration to wait for a worker process to stop. (default: 5s) [$FUNCTION_WORKER_STOP_TIMEOUT]
 ```
 
 ## Evaluation Runtime Interface

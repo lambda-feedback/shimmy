@@ -46,26 +46,6 @@ type MuEdEvaluateRequest struct {
 	CallbackUrl *string `json:"callbackUrl"`
 }
 
-var SupportedMuEdVersions = []string{"0.1.0"}
-
-// MuEdIsVersionSupported reports whether version is in SupportedMuEdVersions.
-func MuEdIsVersionSupported(version string) bool {
-	for _, v := range SupportedMuEdVersions {
-		if v == version {
-			return true
-		}
-	}
-	return false
-}
-
-// MuEdResolveVersion returns requested if it's supported, else the latest version.
-func MuEdResolveVersion(requested string) string {
-	if MuEdIsVersionSupported(requested) {
-		return requested
-	}
-	return SupportedMuEdVersions[len(SupportedMuEdVersions)-1]
-}
-
 // MuEdToHealthResponse converts a legacy runtime health result to muEd format.
 func MuEdToHealthResponse(result map[string]any) map[string]any {
 	status := "DEGRADED"

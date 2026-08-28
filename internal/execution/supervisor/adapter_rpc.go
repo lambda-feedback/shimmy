@@ -227,7 +227,9 @@ func (a *rpcAdapter) dialRpcWithRetry(
 ) error {
 	var err error
 	for i := 0; ; i++ {
-		if client, err := a.dialRpc(ctx, a.config); err == nil {
+		var client *rpc.Client
+		client, err = a.dialRpc(ctx, a.config)
+		if err == nil {
 			a.rpcClient = client
 			return nil
 		}

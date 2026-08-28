@@ -17,5 +17,7 @@ func Module() fx.Option {
 		fx.Provide(NewMuEdEvaluateHealthRoute),
 		fx.Provide(func(cfg config.Config) progress.Config { return cfg.Progress }),
 		fx.Provide(progress.NewHTTPFactory),
+		fx.Provide(NewMuEdChatRoute),
+		fx.Provide(NewMuEdChatHealthRoute),
 	)
 }

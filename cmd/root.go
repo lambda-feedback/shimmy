@@ -160,6 +160,13 @@ functions on arbitrary, serverless platforms.`
 				Category: "worker",
 				EnvVars:  []string{"FUNCTION_WORKER_SEND_TIMEOUT"},
 			},
+			&cli.DurationFlag{
+				Name:     "worker-start-timeout",
+				Usage:    "the duration to wait for the application to start (worker process boot + first successful RPC dial).",
+				Value:    15 * time.Second,
+				Category: "worker",
+				EnvVars:  []string{"FUNCTION_WORKER_START_TIMEOUT"},
+			},
 			&cli.StringFlag{
 				Name:     "rpc-transport",
 				Aliases:  []string{"t"},
@@ -395,6 +402,7 @@ func parseRootConfig(ctx *cli.Context) (config.Config, error) {
 		"rpc-transport-tcp-address":            "runtime.io.rpc.tcp.address",
 		"worker-send-timeout":                  "runtime.send.timeout",
 		"worker-stop-timeout":                  "runtime.stop.timeout",
+		"worker-start-timeout":                 "start_timeout",
 		// sandbox
 		"sandbox":                 "runtime.sandbox.enabled",
 		"sandbox-nsjail-path":     "runtime.sandbox.nsjail_path",
