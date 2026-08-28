@@ -14,6 +14,8 @@ func Module(config Config) fx.Option {
 		fx.Supply(config),
 		// rename logger for module
 		logging.DecorateLogger("lambda"),
+		// the Lambda proxy buffers the whole response — no incremental streaming
+		fx.Supply(handler.StreamingCapability{Enabled: false}),
 		// provide handlers
 		handler.Module(),
 		// provide server

@@ -22,7 +22,7 @@ func TestOpenAPIMiddleware_Init(t *testing.T) {
 	spec, err := LoadOpenAPISpec()
 	require.NoError(t, err)
 
-	middleware, err := OpenAPIMiddleware(spec, zap.NewNop())
+	middleware, err := OpenAPIMiddleware(spec, zap.NewNop(), true)
 	require.NoError(t, err)
 	assert.NotNil(t, middleware)
 }
@@ -125,11 +125,11 @@ func TestOpenAPIMiddleware_ValidHealthRequest_ReachesHandler(t *testing.T) {
 		w.Write(mustJSON(t, map[string]any{ //nolint:errcheck
 			"status": "OK",
 			"capabilities": map[string]any{
-				"supportsEvaluate":           true,
+				"supportsEvaluate":              true,
 				"supportsPreSubmissionFeedback": false,
-				"supportsFormativeFeedback":  true,
-				"supportsSummativeFeedback":  true,
-				"supportsDataPolicy":         "NOT_SUPPORTED",
+				"supportsFormativeFeedback":     true,
+				"supportsSummativeFeedback":     true,
+				"supportsDataPolicy":            "NOT_SUPPORTED",
 			},
 		}))
 	})
@@ -142,12 +142,96 @@ func TestOpenAPIMiddleware_ValidHealthRequest_ReachesHandler(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestOpenAPIMiddleware_SSEEvaluate_BypassesResponseValidation(t *testing.T) {
+	middleware := mustMiddleware(t)
+
+	body := mustJSON(t, map[string]any{
+		"submission": map[string]any{
+			"type":    "TEXT",
+			"content": map[string]any{"text": "hello"},
+		},
+	})
+
+	var flushed bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A non-JSON, non-spec body that the buffered path would 500.
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("event: completed\ndata: {}\n\n")) //nolint:errcheck
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+			flushed = true
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	w := httptest.NewRecorder()
+	middleware(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
+	assert.Equal(t, "event: completed\ndata: {}\n\n", w.Body.String())
+	assert.True(t, flushed, "handler should receive a flushable writer")
+}
+
+func TestOpenAPIMiddleware_SSEEvaluate_RequestStillValidated(t *testing.T) {
+	middleware := mustMiddleware(t)
+
+	// missing required "submission"
+	body := mustJSON(t, map[string]any{})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("next handler must not be called for invalid request")
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	w := httptest.NewRecorder()
+	middleware(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestOpenAPIMiddleware_SSEDisabled_StillBuffersAndValidates(t *testing.T) {
+	middleware := mustMiddleware(t, false)
+
+	body := mustJSON(t, map[string]any{
+		"submission": map[string]any{
+			"type":    "TEXT",
+			"content": map[string]any{"text": "hello"},
+		},
+	})
+
+	// object body: valid JSON but spec requires an array for POST /evaluate 200
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"unexpected": "object"}`)) //nolint:errcheck
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	w := httptest.NewRecorder()
+	middleware(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
 // mustMiddleware loads the real spec and returns the initialised middleware, failing the test on error.
-func mustMiddleware(t *testing.T) func(http.Handler) http.Handler {
+// SSE streaming bypass is enabled unless sseEnabled[0] is explicitly false.
+func mustMiddleware(t *testing.T, sseEnabled ...bool) func(http.Handler) http.Handler {
 	t.Helper()
+	enabled := true
+	if len(sseEnabled) > 0 {
+		enabled = sseEnabled[0]
+	}
 	spec, err := LoadOpenAPISpec()
 	require.NoError(t, err)
-	middleware, err := OpenAPIMiddleware(spec, zap.NewNop())
+	middleware, err := OpenAPIMiddleware(spec, zap.NewNop(), enabled)
 	require.NoError(t, err)
 	return middleware
 }

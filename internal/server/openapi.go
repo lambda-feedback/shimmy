@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
@@ -26,7 +27,19 @@ func LoadOpenAPISpec() (*openapi3.T, error) {
 	return spec, nil
 }
 
-func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) (func(http.Handler) http.Handler, error) {
+// sseStreamsEvaluate reports whether this request is an SSE-streaming
+// POST /evaluate: its response is written and flushed incrementally, so
+// the middleware must not buffer it through httptest.NewRecorder (which
+// also strips http.Flusher) or validate its non-JSON body against the
+// spec. Request validation still runs. Matched with HasSuffix because the
+// middleware runs before NormalizePath rewrites the path.
+func sseStreamsEvaluate(r *http.Request) bool {
+	return r.Method == http.MethodPost &&
+		strings.HasSuffix(r.URL.Path, "/evaluate") &&
+		strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream")
+}
+
+func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger, sseEnabled bool) (func(http.Handler) http.Handler, error) {
 	router, err := legacy.NewRouter(spec,
 		openapi3.IsOpenAPI31OrLater(),
 		openapi3.AllowExtraSiblingFields("description", "summary"),
@@ -54,6 +67,13 @@ func OpenAPIMiddleware(spec *openapi3.T, log *zap.Logger) (func(http.Handler) ht
 			}
 			if err := openapi3filter.ValidateRequest(r.Context(), reqInput); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
+			// A streaming SSE response can't be buffered or JSON-validated;
+			// hand the real writer straight to the handler.
+			if sseEnabled && sseStreamsEvaluate(r) {
+				next.ServeHTTP(w, r)
 				return
 			}
 

@@ -39,6 +39,24 @@ type Config struct {
 	// relayed through the same outbound delivery path as shim-authored
 	// events.
 	Sidecar SidecarConfig `conf:"sidecar"`
+
+	// Stream configures in-band SSE delivery of progress for /evaluate
+	// requests that send "Accept: text/event-stream" (see sse_reporter.go).
+	// Only effective in standalone/serve mode; Lambda cannot stream.
+	Stream StreamConfig `conf:"stream"`
+}
+
+// StreamConfig configures in-band Server-Sent Events progress delivery.
+type StreamConfig struct {
+	// Enabled turns SSE streaming on. When false, the "Accept:
+	// text/event-stream" request header is ignored and /evaluate serves
+	// its normal buffered JSON response.
+	Enabled bool `conf:"enabled"`
+
+	// HeartbeatSeconds is the spacing between SSE heartbeat comments sent
+	// while an evaluation runs, so an idle connection isn't dropped by an
+	// intermediary. 0 disables heartbeats.
+	HeartbeatSeconds int `conf:"heartbeat_seconds"`
 }
 
 // Factory builds a per-request Reporter from caller-supplied callback

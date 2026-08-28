@@ -11,6 +11,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+
+	"github.com/lambda-feedback/shimmy/config"
 )
 
 type HttpServerParams struct {
@@ -18,8 +20,9 @@ type HttpServerParams struct {
 
 	Context context.Context
 
-	Config HttpConfig
-	Spec   *openapi3.T
+	Config    HttpConfig
+	AppConfig config.Config
+	Spec      *openapi3.T
 
 	Handlers []*HttpHandler `group:"handlers"`
 	Logger   *zap.Logger
@@ -41,7 +44,7 @@ func NewHttpServer(params HttpServerParams) (*HttpServer, error) {
 	}
 
 	var handler http.Handler = NormalizePath(mux)
-	openAPIMiddleware, err := OpenAPIMiddleware(params.Spec, params.Logger)
+	openAPIMiddleware, err := OpenAPIMiddleware(params.Spec, params.Logger, params.AppConfig.Progress.Stream.Enabled)
 	if err != nil {
 		return nil, fmt.Errorf("initialising OpenAPI middleware: %w", err)
 	}

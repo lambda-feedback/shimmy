@@ -1,11 +1,14 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/fx"
@@ -48,28 +51,31 @@ func generateRequestID() string {
 type MuEdHandlerParams struct {
 	fx.In
 
-	Handler         runtime.Handler
-	Runtime         runtime.Runtime
-	Config          config.Config
-	Log             *zap.Logger
-	ProgressFactory progress.Factory
+	Handler             runtime.Handler
+	Runtime             runtime.Runtime
+	Config              config.Config
+	Log                 *zap.Logger
+	ProgressFactory     progress.Factory
+	StreamingCapability StreamingCapability
 }
 
 type MuEdHandler struct {
-	handler         runtime.Handler
-	runtime         runtime.Runtime
-	config          config.Config
-	log             *zap.Logger
-	progressFactory progress.Factory
+	handler          runtime.Handler
+	runtime          runtime.Runtime
+	config           config.Config
+	log              *zap.Logger
+	progressFactory  progress.Factory
+	streamingCapable bool
 }
 
 func NewMuEdHandler(params MuEdHandlerParams) *MuEdHandler {
 	return &MuEdHandler{
-		handler:         params.Handler,
-		runtime:         params.Runtime,
-		config:          params.Config,
-		log:             params.Log,
-		progressFactory: params.ProgressFactory,
+		handler:          params.Handler,
+		runtime:          params.Runtime,
+		config:           params.Config,
+		log:              params.Log,
+		progressFactory:  params.ProgressFactory,
+		streamingCapable: params.StreamingCapability.Enabled,
 	}
 }
 
@@ -198,7 +204,21 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		callbackURL = *muEdReq.CallbackUrl
 	}
 
+	streaming := h.streamingCapable && h.config.Progress.Stream.Enabled && acceptsEventStream(r)
+	if streaming {
+		if _, ok := w.(http.Flusher); !ok {
+			h.log.Warn("response writer is not a flusher; serving buffered response")
+			streaming = false
+		}
+	}
+
 	ctx := r.Context()
+
+	if streaming {
+		h.serveEvaluateStream(ctx, w, req, command, isPreview, version, callbackURL, requestID)
+		return
+	}
+
 	reporter, err := h.progressFactory.NewReporter(callbackURL, requestID)
 	if err != nil {
 		h.log.Warn("invalid callbackUrl, disabling progress reporting", zap.Error(err))
@@ -208,41 +228,29 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 
 	resp := h.handler.Handle(ctx, req)
 
-	if resp.StatusCode != http.StatusOK {
+	feedback, termErr := h.produceFeedback(resp, isPreview)
+	if termErr != nil {
 		progress.Emit(ctx, progress.Event{
 			Stage:   progress.StageFailed,
 			Command: string(command),
-			Message: muEdErrorMessageFromBody(resp.Body),
+			Message: termErr.userMessage,
+			Error:   termErr.rawError,
 		})
 
-		for k, v := range resp.Header {
-			for _, vv := range v {
-				w.Header().Add(k, vv)
+		if termErr.passthrough {
+			for k, v := range termErr.header {
+				for _, vv := range v {
+					w.Header().Add(k, vv)
+				}
 			}
+			w.Header().Set(muEdVersionHeader, version)
+			w.WriteHeader(termErr.status)
+			w.Write(termErr.body) //nolint:errcheck
+			return
 		}
-		w.Header().Set(muEdVersionHeader, version)
-		w.WriteHeader(resp.StatusCode)
-		w.Write(resp.Body) //nolint:errcheck
-		return
-	}
 
-	var respBody map[string]any
-	if err := json.Unmarshal(resp.Body, &respBody); err != nil {
-		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "failed to parse response", nil)
+		h.writeMuEdError(w, version, termErr.status, termErr.muEdCode, termErr.muEdTitle, termErr.muEdMessage, nil)
 		return
-	}
-
-	result, ok := respBody["result"].(map[string]any)
-	if !ok {
-		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "invalid response from evaluation function", nil)
-		return
-	}
-
-	var feedback []map[string]any
-	if isPreview {
-		feedback = runtime.MuEdToPreviewFeedback(result)
-	} else {
-		feedback = runtime.MuEdToEvaluateFeedback(result)
 	}
 
 	// Carry the feedback itself on the completed event so that, when a
@@ -261,6 +269,173 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set(muEdVersionHeader, version)
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(feedback) //nolint:errcheck
+}
+
+// acceptsEventStream reports whether the caller opted in to an SSE
+// streaming response via the Accept header.
+func acceptsEventStream(r *http.Request) bool {
+	return strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream")
+}
+
+// terminalError is the outcome of produceFeedback when feedback can't be
+// produced. It carries everything the buffered and streaming paths each
+// need to report the failure, so produceFeedback itself performs no
+// writes and emits no events.
+type terminalError struct {
+	// passthrough replays the evaluation function's own non-2xx response
+	// verbatim (buffered path only).
+	passthrough bool
+	header      http.Header
+	status      int
+	body        []byte
+
+	// muEd* describe a shimmy-internal error for writeMuEdError (buffered
+	// path only).
+	muEdCode    string
+	muEdTitle   string
+	muEdMessage string
+
+	// userMessage and rawError feed the StageFailed progress event and,
+	// on the streaming path, the "failed" SSE frame.
+	userMessage string
+	rawError    string
+}
+
+// produceFeedback turns a runtime response into muEd feedback, or a
+// terminalError describing why it couldn't. It is pure: no writes, no
+// progress events.
+func (h *MuEdHandler) produceFeedback(resp runtime.Response, isPreview bool) ([]map[string]any, *terminalError) {
+	if resp.StatusCode != http.StatusOK {
+		return nil, &terminalError{
+			passthrough: true,
+			header:      resp.Header,
+			status:      resp.StatusCode,
+			body:        resp.Body,
+			userMessage: muEdErrorMessageFromBody(resp.Body),
+			rawError:    string(resp.Body),
+		}
+	}
+
+	var respBody map[string]any
+	if err := json.Unmarshal(resp.Body, &respBody); err != nil {
+		return nil, &terminalError{
+			status:      http.StatusInternalServerError,
+			muEdCode:    "INTERNAL_ERROR",
+			muEdTitle:   "Internal server error",
+			muEdMessage: "failed to parse response",
+			userMessage: "We couldn't evaluate your answer. Please try again.",
+			rawError:    fmt.Sprintf("failed to parse response: %v", err),
+		}
+	}
+
+	result, ok := respBody["result"].(map[string]any)
+	if !ok {
+		return nil, &terminalError{
+			status:      http.StatusInternalServerError,
+			muEdCode:    "INTERNAL_ERROR",
+			muEdTitle:   "Internal server error",
+			muEdMessage: "invalid response from evaluation function",
+			userMessage: "We couldn't evaluate your answer. Please try again.",
+			rawError:    "invalid response from evaluation function",
+		}
+	}
+
+	if isPreview {
+		return runtime.MuEdToPreviewFeedback(result), nil
+	}
+	return runtime.MuEdToEvaluateFeedback(result), nil
+}
+
+// serveEvaluateStream handles a POST /evaluate request that opted in to
+// SSE streaming. It commits a 200 + event-stream headers immediately,
+// keeps the connection alive with heartbeats while the evaluation runs,
+// and emits exactly one terminal frame (completed | failed) carrying the
+// feedback plus every step that preceded it. Because the status is
+// already committed, every post-Handle outcome — including an internal
+// error — becomes a "failed" frame, never an HTTP error.
+func (h *MuEdHandler) serveEvaluateStream(
+	ctx context.Context,
+	w http.ResponseWriter,
+	req runtime.Request,
+	command runtime.Command,
+	isPreview bool,
+	version string,
+	callbackURL string,
+	requestID string,
+) {
+	cmdLabel := "evaluate"
+	if isPreview {
+		cmdLabel = "preview"
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.Header().Set(muEdVersionHeader, version)
+	w.WriteHeader(http.StatusOK)
+	w.(http.Flusher).Flush()
+
+	sseReporter, err := progress.NewSSEReporter(w, cmdLabel, h.log)
+	if err != nil {
+		// Guarded against by the caller; don't panic if it slips through.
+		h.log.Error("failed to create SSE reporter", zap.Error(err))
+		return
+	}
+
+	var reporter progress.Reporter = sseReporter
+	if callbackURL != "" {
+		cbReporter, cbErr := h.progressFactory.NewReporter(callbackURL, requestID)
+		if cbErr != nil {
+			h.log.Warn("invalid callbackUrl, disabling callback delivery", zap.Error(cbErr))
+		} else if cbReporter != nil {
+			reporter = progress.NewMultiReporter(sseReporter, cbReporter)
+		}
+	}
+	ctx = progress.ContextWithReporter(ctx, reporter)
+
+	done := make(chan struct{})
+	var hbWG sync.WaitGroup
+	if secs := h.config.Progress.Stream.HeartbeatSeconds; secs > 0 {
+		hbWG.Add(1)
+		go func() {
+			defer hbWG.Done()
+			ticker := time.NewTicker(time.Duration(secs) * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					sseReporter.Heartbeat()
+				}
+			}
+		}()
+	}
+
+	resp := h.handler.Handle(ctx, req)
+
+	feedback, termErr := h.produceFeedback(resp, isPreview)
+	if termErr != nil {
+		progress.Emit(ctx, progress.Event{
+			Stage:   progress.StageFailed,
+			Command: string(command),
+			Message: termErr.userMessage,
+			Error:   termErr.rawError,
+		})
+	} else {
+		progress.Emit(ctx, progress.Event{
+			Stage:   progress.StageCompleted,
+			Command: string(command),
+			Message: "Feedback is ready.",
+			Data:    map[string]any{"feedback": feedback},
+		})
+	}
+
+	close(done)
+	hbWG.Wait()
 }
 
 // muEdErrorMessageFromBody best-effort extracts a human-readable message

@@ -99,6 +99,20 @@ functions on arbitrary, serverless platforms.`
 				Category: "progress",
 				EnvVars:  []string{"PROGRESS_SIDECAR_UNBIND_GRACE_PERIOD"},
 			},
+			&cli.BoolFlag{
+				Name:     "progress-stream-enabled",
+				Usage:    "stream progress back on the /evaluate response as Server-Sent Events for requests that send 'Accept: text/event-stream'. Standalone/serve mode only; ignored under AWS Lambda.",
+				Value:    true,
+				Category: "progress",
+				EnvVars:  []string{"PROGRESS_STREAM_ENABLED"},
+			},
+			&cli.IntFlag{
+				Name:     "progress-stream-heartbeat-seconds",
+				Usage:    "seconds between SSE heartbeat comments sent while an evaluation runs, so an idle streamed connection isn't dropped by an intermediary. 0 disables heartbeats.",
+				Value:    15,
+				Category: "progress",
+				EnvVars:  []string{"PROGRESS_STREAM_HEARTBEAT_SECONDS"},
+			},
 			// shim flags
 			&cli.StringFlag{
 				Name:     "interface",
@@ -389,6 +403,8 @@ func parseRootConfig(ctx *cli.Context) (config.Config, error) {
 		"progress-sidecar-burst-size":          "progress.sidecar.burst_size",
 		"progress-sidecar-min-event-interval":  "progress.sidecar.min_event_interval",
 		"progress-sidecar-unbind-grace-period": "progress.sidecar.unbind_grace_period",
+		"progress-stream-enabled":              "progress.stream.enabled",
+		"progress-stream-heartbeat-seconds":    "progress.stream.heartbeat_seconds",
 		"max-workers":                          "runtime.max_workers",
 		"command":                              "runtime.cmd",
 		"cwd":                                  "runtime.cwd",
