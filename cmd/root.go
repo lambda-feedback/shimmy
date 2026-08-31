@@ -101,7 +101,7 @@ functions on arbitrary, serverless platforms.`
 			},
 			&cli.BoolFlag{
 				Name:     "progress-stream-enabled",
-				Usage:    "stream progress back on the /evaluate response as Server-Sent Events for requests that send 'Accept: text/event-stream'. Standalone/serve mode only; ignored under AWS Lambda.",
+				Usage:    "stream progress back on the /evaluate and /chat responses as Server-Sent Events for requests that send 'Accept: text/event-stream'. Standalone/serve mode only; ignored under AWS Lambda.",
 				Value:    true,
 				Category: "progress",
 				EnvVars:  []string{"PROGRESS_STREAM_ENABLED"},

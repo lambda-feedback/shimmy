@@ -66,7 +66,7 @@ GLOBAL OPTIONS:
    --progress-sidecar-burst-size value          how many worker-authored progress events at the start of an evaluation are exempt from the minimum spacing below, so a handful of legitimate back-to-back checkpoints aren't rate limited. (default: 5) [$PROGRESS_SIDECAR_BURST_SIZE]
    --progress-sidecar-min-event-interval value  the minimum spacing between worker-authored progress events relayed per evaluation, once the burst allowance above is used up. (default: 10ms) [$PROGRESS_SIDECAR_MIN_EVENT_INTERVAL]
    --progress-sidecar-unbind-grace-period value  how long to keep relaying worker-authored progress events after a request returns, so a fire-and-forget POST dispatched just before the result can still land. (default: 250ms) [$PROGRESS_SIDECAR_UNBIND_GRACE_PERIOD]
-   --progress-stream-enabled                   stream progress back on the /evaluate response as Server-Sent Events for requests that send 'Accept: text/event-stream'. Standalone/serve mode only; ignored under AWS Lambda. (default: true) [$PROGRESS_STREAM_ENABLED]
+   --progress-stream-enabled                   stream progress back on the /evaluate and /chat responses as Server-Sent Events for requests that send 'Accept: text/event-stream'. Standalone/serve mode only; ignored under AWS Lambda. (default: true) [$PROGRESS_STREAM_ENABLED]
    --progress-stream-heartbeat-seconds value   seconds between SSE heartbeat comments sent while an evaluation runs, so an idle streamed connection isn't dropped by an intermediary. 0 disables heartbeats. (default: 15) [$PROGRESS_STREAM_HEARTBEAT_SECONDS]
 
    function
@@ -365,7 +365,7 @@ To emit a custom event, `POST` a small JSON body to `EVAL_PROGRESS_URL`:
 
 - `message` (string, required): student/teacher-facing text.
 - `data` (object, optional): free-form, passed through as-is.
-- There is no `stage` field, by design: an evaluation function can never claim `preparing`, `evaluating`, `completed`, or `failed` — those remain exclusively shim-authored. Custom events are always delivered with `"stage": "progress"`.
+- There is no `stage` field, by design: a worker can never choose its own stage. The shim assigns one from the command in flight — `evaluating` for an `/evaluate` (or `/preview`) request, `thinking` for `/chat` — and the shim-only stages `preparing`, `starting`, `completed`, and `failed` are never available to a worker.
 
 The response status is informational only — the evaluation function should treat every response as fire-and-forget and never fail on a non-2xx status. Delivery is best-effort, same as outbound callback delivery: `202` accepted (delivery to `callbackUrl` is then attempted in the background), `400` malformed body or empty `message`, `413` body too large, `429` rate limited, `503` no request currently associated with the listener (e.g. a stray POST arriving after both the request has finished and the grace period below has elapsed).
 
