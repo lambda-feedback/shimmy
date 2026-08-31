@@ -3,6 +3,7 @@ package handler
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -45,6 +46,35 @@ func sseRequest(t *testing.T, body []byte) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(body))
 	req.Header.Set("Accept", "text/event-stream")
 	return req
+}
+
+type sseFrame struct {
+	event string
+	data  map[string]any
+}
+
+// parseSSEAll returns every non-comment frame in order.
+func parseSSEAll(t *testing.T, raw string) []sseFrame {
+	t.Helper()
+	var frames []sseFrame
+	for _, block := range strings.Split(strings.TrimSpace(raw), "\n\n") {
+		block = strings.TrimSpace(block)
+		if block == "" || strings.HasPrefix(block, ":") {
+			continue
+		}
+		var f sseFrame
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				f.event = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "data: "):
+				f.data = map[string]any{}
+				require.NoError(t, json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &f.data))
+			}
+		}
+		frames = append(frames, f)
+	}
+	return frames
 }
 
 // parseSSE returns (eventName, decoded data) of the single terminal frame.
@@ -112,6 +142,44 @@ func TestServeEvaluate_SSE_Success(t *testing.T) {
 
 	_, ok = data["steps"].([]any)
 	assert.True(t, ok, "steps should always be present as an array")
+}
+
+func TestServeEvaluate_SSE_StreamsLiveStepFrames(t *testing.T) {
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			ctx := args.Get(0).(context.Context)
+			// Shim lifecycle events, emitted twice as the per-case loop
+			// would; only the first of each should reach the wire.
+			progress.Emit(ctx, progress.Event{Stage: progress.StagePreparing, Message: "Preparing your evaluation…"})
+			progress.Emit(ctx, progress.Event{Stage: progress.StageEvaluating, Message: "Evaluating your submission…"})
+			progress.Emit(ctx, progress.Event{Stage: progress.StageProgress, Message: "Parsing response and answer..."})
+			progress.Emit(ctx, progress.Event{Stage: progress.StageProgress, Message: "Comparing sets for equivalence..."})
+			progress.Emit(ctx, progress.Event{Stage: progress.StagePreparing, Message: "Preparing your evaluation…"})
+		}).
+		Return(evalHandlerResponse(true, "Well done"))
+
+	w := httptest.NewRecorder()
+	newStreamHandler(mockHandler, nil, progress.StreamConfig{Enabled: true}).
+		ServeEvaluate(w, sseRequest(t, mathEvalBody(t)))
+
+	frames := parseSSEAll(t, w.Body.String())
+	var events []string
+	for _, f := range frames {
+		events = append(events, f.event)
+	}
+	assert.Equal(t, []string{"preparing", "evaluating", "progress", "progress", "completed"}, events)
+
+	// The first live frame's data is one step object, identical in shape
+	// to an element of the terminal frame's steps[].
+	assert.Equal(t, "preparing", frames[0].data["stage"])
+	assert.Equal(t, "Parsing response and answer...", frames[2].data["message"])
+
+	steps, ok := frames[4].data["steps"].([]any)
+	require.True(t, ok)
+	require.Len(t, steps, 4)
+	assert.Equal(t, "preparing", steps[0].(map[string]any)["stage"])
+	assert.Equal(t, "progress", steps[3].(map[string]any)["stage"])
 }
 
 func TestServeEvaluate_SSE_Preview(t *testing.T) {

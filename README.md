@@ -66,6 +66,8 @@ GLOBAL OPTIONS:
    --progress-sidecar-burst-size value          how many worker-authored progress events at the start of an evaluation are exempt from the minimum spacing below, so a handful of legitimate back-to-back checkpoints aren't rate limited. (default: 5) [$PROGRESS_SIDECAR_BURST_SIZE]
    --progress-sidecar-min-event-interval value  the minimum spacing between worker-authored progress events relayed per evaluation, once the burst allowance above is used up. (default: 10ms) [$PROGRESS_SIDECAR_MIN_EVENT_INTERVAL]
    --progress-sidecar-unbind-grace-period value  how long to keep relaying worker-authored progress events after a request returns, so a fire-and-forget POST dispatched just before the result can still land. (default: 250ms) [$PROGRESS_SIDECAR_UNBIND_GRACE_PERIOD]
+   --progress-stream-enabled                   stream progress back on the /evaluate response as Server-Sent Events for requests that send 'Accept: text/event-stream'. Standalone/serve mode only; ignored under AWS Lambda. (default: true) [$PROGRESS_STREAM_ENABLED]
+   --progress-stream-heartbeat-seconds value   seconds between SSE heartbeat comments sent while an evaluation runs, so an idle streamed connection isn't dropped by an intermediary. 0 disables heartbeats. (default: 15) [$PROGRESS_STREAM_HEARTBEAT_SECONDS]
 
    function
 
@@ -265,6 +267,70 @@ Since `callbackUrl` is caller-supplied, the shim guards against it being used to
 A rejected callback URL behaves like any other delivery failure: it's logged and skipped, never surfaced to the caller as an evaluation failure.
 
 > **Note:** the µEd spec describes `callbackUrl` for asynchronous *final-result* delivery — the service may return `202 Accepted` immediately and POST the result later. The shim doesn't implement that 202 flow; it always responds synchronously with `200 OK` and the feedback body as normal. It reuses the same `callbackUrl` field to additionally deliver progress events — including the final feedback, via the `completed` event's `data` field — rather than requiring a shim-specific header for the same concept.
+
+#### Streaming progress on the response itself (Server-Sent Events)
+
+A caller that would rather receive progress on the `/evaluate` response than stand up a
+`callbackUrl` receiver can opt in with an `Accept: text/event-stream` request header. The
+shim then keeps the response open and streams [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
+as the evaluation runs, instead of the buffered `Feedback[]` JSON body.
+
+- **Standalone / `serve` mode only.** Under AWS Lambda the proxy buffers the whole response,
+  so the `Accept` header is ignored and the normal buffered JSON body is returned. Disable it
+  everywhere with `--progress-stream-enabled=false`.
+- Works alongside `callbackUrl`: if a request carries both, every event is delivered to the
+  stream **and** POSTed to the callback.
+- The connection is bound to the request context — if the caller disconnects, the evaluation
+  is cancelled.
+
+Each non-terminal event is written as its own frame the moment it occurs, so the caller sees
+progress live:
+
+```
+event: preparing
+data: {"stage":"preparing","message":"Preparing your evaluation…","timestamp":"2026-08-31T09:16:29.474Z"}
+
+event: evaluating
+data: {"stage":"evaluating","message":"Evaluating your submission…","timestamp":"2026-08-31T09:16:29.474Z"}
+
+event: progress
+data: {"stage":"progress","message":"Ran 3/10 cases","data":{"completed":3,"total":10},"timestamp":"2026-08-31T09:16:29.522Z"}
+```
+
+`preparing` and `evaluating` are streamed **once per request** even though a multi-case
+evaluation re-enters those stages per case; worker-authored `progress` events are streamed
+every time. The `event:` line carries the stage; the `data` payload is a self-contained step
+object (`stage`, `message`, optional `data`, `timestamp`).
+
+The stream then ends with exactly one terminal frame — `event: completed` or `event: failed`
+— carrying the feedback plus every step that preceded it, and the connection closes:
+
+```
+event: completed
+data: {"command":"evaluate",
+       "feedback":[{"awardedPoints":1,"message":"Well done"}],
+       "steps":[{"stage":"preparing","message":"Preparing your evaluation…","timestamp":"…"},
+                {"stage":"evaluating","message":"Evaluating your submission…","timestamp":"…"},
+                {"stage":"progress","message":"Ran 3/10 cases","data":{"completed":3,"total":10},"timestamp":"…"}]}
+```
+
+```
+event: failed
+data: {"command":"evaluate","feedback":null,
+       "steps":[ /* whatever streamed before the failure */ ],
+       "error":"worker send: context deadline exceeded",
+       "message":"We couldn't evaluate your answer. Please try again."}
+```
+
+Each element of the terminal frame's `steps[]` is byte-identical to the `data` payload of the
+live frame that carried it. The HTTP status is `200` even for a `failed` frame — the failure
+is in-band. `command` is `"evaluate"` or `"preview"`. The correlation id is in the
+`X-Request-Id` response header, not the body. Response headers: `Content-Type:
+text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`, no `Content-Length`.
+
+While the evaluation runs, the shim also writes an SSE comment heartbeat (`: ping`) every
+`--progress-stream-heartbeat-seconds` seconds (default `15`; `0` disables) so an idle
+connection isn't dropped by an intermediary.
 
 #### Custom progress events from the evaluation function
 

@@ -3,6 +3,7 @@ package progress
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,10 +71,13 @@ func TestSSEReporter_CompletedEnvelope(t *testing.T) {
 	}
 
 	frames := parseSSEFrames(t, rec.Body.String())
-	if len(frames) != 1 {
-		t.Fatalf("expected 1 frame, got %d: %q", len(frames), rec.Body.String())
+	if len(frames) != 3 {
+		t.Fatalf("expected 3 frames (preparing, evaluating, completed), got %d: %q", len(frames), rec.Body.String())
 	}
-	f := frames[0]
+	if frames[0].event != "preparing" || frames[1].event != "evaluating" {
+		t.Errorf("unexpected live frame events: %q, %q", frames[0].event, frames[1].event)
+	}
+	f := frames[2]
 	if f.event != "completed" {
 		t.Errorf("expected event 'completed', got %q", f.event)
 	}
@@ -110,10 +114,13 @@ func TestSSEReporter_FailedEnvelope(t *testing.T) {
 	})
 
 	frames := parseSSEFrames(t, rec.Body.String())
-	if len(frames) != 1 {
-		t.Fatalf("expected 1 frame, got %d", len(frames))
+	if len(frames) != 2 {
+		t.Fatalf("expected 2 frames (preparing, failed), got %d", len(frames))
 	}
-	f := frames[0]
+	if frames[0].event != "preparing" {
+		t.Errorf("expected first frame 'preparing', got %q", frames[0].event)
+	}
+	f := frames[1]
 	if f.event != "failed" {
 		t.Errorf("expected event 'failed', got %q", f.event)
 	}
@@ -143,19 +150,32 @@ func TestSSEReporter_PreviewCommandLabel(t *testing.T) {
 	}
 }
 
-func TestSSEReporter_DedupConsecutivePreparingEvaluating(t *testing.T) {
+func TestSSEReporter_DedupLifecycleStagesOncePerRequest(t *testing.T) {
 	rec, r := newRecorderReporter(t, "evaluate")
-	for _, s := range []Stage{StagePreparing, StagePreparing, StageEvaluating, StageEvaluating, StagePreparing} {
+	// The per-case evaluation loop re-emits preparing/evaluating once per
+	// case; only the first of each for the whole request is kept.
+	for _, s := range []Stage{StagePreparing, StagePreparing, StageEvaluating, StageEvaluating, StageProgress, StagePreparing} {
 		r.Report(context.Background(), Event{Stage: s})
 	}
 	r.Report(context.Background(), Event{Stage: StageCompleted, Data: map[string]any{"feedback": []map[string]any{}}})
 
-	steps := parseSSEFrames(t, rec.Body.String())[0].data["steps"].([]any)
+	frames := parseSSEFrames(t, rec.Body.String())
+
+	// Live frames: one preparing, one evaluating, one progress, then completed.
+	var liveEvents []string
+	for _, f := range frames[:len(frames)-1] {
+		liveEvents = append(liveEvents, f.event)
+	}
+	if strings.Join(liveEvents, ",") != "preparing,evaluating,progress" {
+		t.Errorf("expected live frames [preparing evaluating progress], got %v", liveEvents)
+	}
+
+	steps := frames[len(frames)-1].data["steps"].([]any)
 	got := []string{}
 	for _, s := range steps {
 		got = append(got, s.(map[string]any)["stage"].(string))
 	}
-	want := []string{"preparing", "evaluating", "preparing"}
+	want := []string{"preparing", "evaluating", "progress"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("expected steps %v, got %v", want, got)
 	}
@@ -165,11 +185,22 @@ func TestSSEReporter_ProgressStepsNotDedupedAndTimestamped(t *testing.T) {
 	rec, r := newRecorderReporter(t, "evaluate")
 	r.Report(context.Background(), Event{Stage: StageProgress, Message: "same"})
 	r.Report(context.Background(), Event{Stage: StageProgress, Message: "same"})
+	r.Report(context.Background(), Event{Stage: StageProgress, Message: "same"})
 	r.Report(context.Background(), Event{Stage: StageCompleted, Data: map[string]any{"feedback": []map[string]any{}}})
 
-	steps := parseSSEFrames(t, rec.Body.String())[0].data["steps"].([]any)
-	if len(steps) != 2 {
-		t.Fatalf("expected 2 progress steps, got %d", len(steps))
+	frames := parseSSEFrames(t, rec.Body.String())
+	if len(frames) != 4 {
+		t.Fatalf("expected 4 frames (3 progress + completed), got %d: %q", len(frames), rec.Body.String())
+	}
+	for _, f := range frames[:3] {
+		if f.event != "progress" {
+			t.Errorf("expected a 'progress' live frame, got %q", f.event)
+		}
+	}
+
+	steps := frames[3].data["steps"].([]any)
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 progress steps, got %d", len(steps))
 	}
 	for _, s := range steps {
 		ts, _ := s.(map[string]any)["timestamp"].(string)
@@ -238,9 +269,22 @@ func TestSSEReporter_ConcurrentReport(t *testing.T) {
 	wg.Wait()
 	r.Report(context.Background(), Event{Stage: StageCompleted, Data: map[string]any{"feedback": []map[string]any{}}})
 
+	// Every frame must be a well-formed event/data pair (parseSSEFrames
+	// fails the test otherwise). Exactly one terminal frame, and it's last.
 	frames := parseSSEFrames(t, rec.Body.String())
-	if len(frames) != 1 || frames[0].event != "completed" {
-		t.Fatalf("expected exactly 1 completed frame, got %d: %q", len(frames), rec.Body.String())
+	terminals := 0
+	for i, f := range frames {
+		if f.event == "completed" || f.event == "failed" {
+			terminals++
+			if i != len(frames)-1 {
+				t.Errorf("terminal frame at index %d is not last of %d", i, len(frames))
+			}
+		} else if f.event != "progress" {
+			t.Errorf("unexpected intermediate frame event %q", f.event)
+		}
+	}
+	if terminals != 1 {
+		t.Fatalf("expected exactly 1 terminal frame, got %d: %q", terminals, rec.Body.String())
 	}
 }
 
@@ -254,5 +298,85 @@ func TestNewSSEReporter_NonFlusher_Error(t *testing.T) {
 	_, err := NewSSEReporter(nonFlusherWriter{h: http.Header{}}, "evaluate", zap.NewNop())
 	if err == nil {
 		t.Fatal("expected an error for a non-flushable writer")
+	}
+}
+
+func TestSSEReporter_LiveFrameMatchesTerminalStep(t *testing.T) {
+	rec, r := newRecorderReporter(t, "evaluate")
+
+	r.Report(context.Background(), Event{
+		Stage:   StageProgress,
+		Message: "Parsing response and answer...",
+		Data:    map[string]any{"step": float64(1), "of": float64(4)},
+	})
+	r.Report(context.Background(), Event{Stage: StageCompleted, Data: map[string]any{"feedback": []map[string]any{}}})
+
+	frames := parseSSEFrames(t, rec.Body.String())
+	if len(frames) != 2 {
+		t.Fatalf("expected 2 frames, got %d: %q", len(frames), rec.Body.String())
+	}
+
+	live := frames[0]
+	if live.event != "progress" {
+		t.Fatalf("expected 'progress' live frame, got %q", live.event)
+	}
+
+	steps := frames[1].data["steps"].([]any)
+	if len(steps) != 1 {
+		t.Fatalf("expected 1 terminal step, got %d", len(steps))
+	}
+
+	// The live frame's data payload must be byte-identical to the matching
+	// terminal steps[] element.
+	wantJSON, _ := json.Marshal(steps[0])
+	gotJSON, _ := json.Marshal(live.data)
+	if string(wantJSON) != string(gotJSON) {
+		t.Errorf("live frame data != terminal step:\n live: %s\n step: %s", gotJSON, wantJSON)
+	}
+}
+
+// failingAfterNWriter is an http.Flusher whose Write starts returning an
+// error after okWrites successful writes.
+type failingAfterNWriter struct {
+	h        http.Header
+	okWrites int
+	writes   int
+	flushed  int
+}
+
+func (w *failingAfterNWriter) Header() http.Header { return w.h }
+func (w *failingAfterNWriter) WriteHeader(int)     {}
+func (w *failingAfterNWriter) Flush()              { w.flushed++ }
+func (w *failingAfterNWriter) Write(b []byte) (int, error) {
+	w.writes++
+	if w.writes > w.okWrites {
+		return 0, io.ErrClosedPipe
+	}
+	return len(b), nil
+}
+
+func TestSSEReporter_LiveFrameWriteErrorDoesNotTerminate(t *testing.T) {
+	w := &failingAfterNWriter{h: http.Header{}, okWrites: 1}
+	r, err := NewSSEReporter(w, "evaluate", zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewSSEReporter: %v", err)
+	}
+
+	// First live frame writes OK; the second fails at the writer.
+	r.Report(context.Background(), Event{Stage: StageProgress, Message: "one"})
+	r.Report(context.Background(), Event{Stage: StageProgress, Message: "two"})
+
+	if r.terminated {
+		t.Fatal("a live-frame write error must not set terminated")
+	}
+
+	// The terminal frame is still attempted (Write is called again).
+	writesBefore := w.writes
+	r.Report(context.Background(), Event{Stage: StageCompleted, Data: map[string]any{"feedback": []map[string]any{}}})
+	if w.writes == writesBefore {
+		t.Error("expected the terminal frame to still attempt a write after a live-frame write error")
+	}
+	if !r.terminated {
+		t.Error("expected terminated to be set once the terminal frame ran")
 	}
 }

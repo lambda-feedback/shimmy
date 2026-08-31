@@ -11,10 +11,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// sseStep is one accumulated progress step in the final SSE frame. Its
-// shape is deliberately the same one a future mid-stream frame will use,
-// so a client parses "a step" the same way whether it arrives inline or
-// inside the terminal envelope.
+// sseStep is one progress step. The same shape is written both as its own
+// live frame (event: <stage>) the moment the event arrives and as an
+// element of the terminal envelope's steps[], so a client parses "a step"
+// the same way whether it arrives inline or inside the terminal frame.
 type sseStep struct {
 	Stage     string         `json:"stage"`
 	Message   string         `json:"message,omitempty"`
@@ -34,10 +34,12 @@ type sseEnvelope struct {
 }
 
 // SSEReporter is a Reporter that streams progress back to the caller on
-// the /evaluate response itself, as Server-Sent Events. In this phase it
-// silently accumulates the intermediate steps and emits exactly one
-// terminal frame (event: completed | failed) carrying the feedback plus
-// every step that preceded it, then the handler closes the connection.
+// the /evaluate response itself, as Server-Sent Events. Each non-terminal
+// event is written immediately as its own frame (event: <stage>, data =
+// the step object) so the caller sees progress as it happens, and is also
+// accumulated; on completion/failure a single terminal frame
+// (event: completed | failed) carries the feedback plus every step that
+// preceded it, then the handler closes the connection.
 //
 // Report is called concurrently — synchronously from the request
 // goroutine for shim-authored events, and from detached sidecar
@@ -49,10 +51,12 @@ type SSEReporter struct {
 	command string
 	log     *zap.Logger
 
-	mu           sync.Mutex
-	steps        []sseStep
-	terminated   bool
-	terminalOnce sync.Once
+	mu             sync.Mutex
+	steps          []sseStep
+	seenPreparing  bool
+	seenEvaluating bool
+	terminated     bool
+	terminalOnce   sync.Once
 }
 
 var _ Reporter = (*SSEReporter)(nil)
@@ -73,10 +77,11 @@ func NewSSEReporter(w http.ResponseWriter, command string, log *zap.Logger) (*SS
 	}, nil
 }
 
-// Report accumulates a non-terminal event as a step, or writes the single
-// terminal frame. Once the terminal frame is written, all further events
-// (including a late worker "progress" relayed after the request returned)
-// are dropped without touching the ResponseWriter.
+// Report streams a non-terminal event as its own frame (and accumulates
+// it), or writes the single terminal frame. Once the terminal frame is
+// written, all further events (including a late worker "progress" relayed
+// after the request returned) are dropped without touching the
+// ResponseWriter.
 func (r *SSEReporter) Report(_ context.Context, evt Event) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -93,6 +98,23 @@ func (r *SSEReporter) Report(_ context.Context, evt Event) {
 		return
 	}
 
+	// Collapse the lifecycle stages to their first occurrence for the
+	// whole request: the per-case evaluation loop re-enters the
+	// supervisor and re-emits preparing/evaluating once per case.
+	// Worker-authored "progress" events are never collapsed.
+	switch evt.Stage {
+	case StagePreparing:
+		if r.seenPreparing {
+			return
+		}
+		r.seenPreparing = true
+	case StageEvaluating:
+		if r.seenEvaluating {
+			return
+		}
+		r.seenEvaluating = true
+	}
+
 	step := sseStep{
 		Stage:     string(evt.Stage),
 		Message:   evt.Message,
@@ -105,16 +127,8 @@ func (r *SSEReporter) Report(_ context.Context, evt Event) {
 		step.Timestamp = time.Now().UTC()
 	}
 
-	// Collapse a run of identical lifecycle stages — the per-case
-	// evaluation loop re-enters the supervisor and re-emits
-	// preparing/evaluating each time. "progress" steps are never
-	// collapsed.
-	if n := len(r.steps); n > 0 && r.steps[n-1].Stage == step.Stage &&
-		(evt.Stage == StagePreparing || evt.Stage == StageEvaluating) {
-		return
-	}
-
 	r.steps = append(r.steps, step)
+	r.writeStepLocked(step)
 }
 
 func (r *SSEReporter) writeEnvelopeLocked(evt Event) {
@@ -148,6 +162,27 @@ func (r *SSEReporter) writeEnvelopeLocked(evt Event) {
 
 	if _, err := fmt.Fprintf(r.w, "event: %s\ndata: %s\n\n", event, body); err != nil {
 		r.log.Debug("failed to write SSE terminal frame", zap.Error(err))
+		return
+	}
+	r.flusher.Flush()
+}
+
+// writeStepLocked streams a single intermediate progress step as its own
+// SSE frame (event: <stage>), so the caller sees progress as it happens
+// rather than only in the terminal frame. The step is already recorded in
+// r.steps for the terminal envelope, so a marshal or write failure here
+// only costs the live frame. A write failure does not set terminated: the
+// terminal-frame attempt and further accumulation continue. Callers hold
+// r.mu.
+func (r *SSEReporter) writeStepLocked(step sseStep) {
+	body, err := json.Marshal(step)
+	if err != nil {
+		r.log.Warn("failed to marshal SSE step", zap.String("stage", step.Stage), zap.Error(err))
+		return
+	}
+
+	if _, err := fmt.Fprintf(r.w, "event: %s\ndata: %s\n\n", step.Stage, body); err != nil {
+		r.log.Debug("failed to write SSE step frame", zap.Error(err))
 		return
 	}
 	r.flusher.Flush()
