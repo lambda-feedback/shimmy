@@ -59,8 +59,8 @@ func newRecorderReporter(t *testing.T, command string) (*httptest.ResponseRecord
 func TestSSEReporter_CompletedEnvelope(t *testing.T) {
 	rec, r := newRecorderReporter(t, "evaluate")
 
-	r.Report(context.Background(), Event{Stage: StagePreparing, Message: "Preparing your evaluation…"})
-	r.Report(context.Background(), Event{Stage: StageEvaluating, Message: "Evaluating your submission…"})
+	r.Report(context.Background(), Event{Stage: StagePreparing, Message: "Preparing…"})
+	r.Report(context.Background(), Event{Stage: StageStarting, Message: "Starting…"})
 	r.Report(context.Background(), Event{
 		Stage: StageCompleted,
 		Data:  map[string]any{"feedback": []map[string]any{{"message": "Well done"}}},
@@ -72,9 +72,9 @@ func TestSSEReporter_CompletedEnvelope(t *testing.T) {
 
 	frames := parseSSEFrames(t, rec.Body.String())
 	if len(frames) != 3 {
-		t.Fatalf("expected 3 frames (preparing, evaluating, completed), got %d: %q", len(frames), rec.Body.String())
+		t.Fatalf("expected 3 frames (preparing, starting, completed), got %d: %q", len(frames), rec.Body.String())
 	}
-	if frames[0].event != "preparing" || frames[1].event != "evaluating" {
+	if frames[0].event != "preparing" || frames[1].event != "starting" {
 		t.Errorf("unexpected live frame events: %q, %q", frames[0].event, frames[1].event)
 	}
 	f := frames[2]
@@ -95,7 +95,7 @@ func TestSSEReporter_CompletedEnvelope(t *testing.T) {
 	if !ok || len(steps) != 2 {
 		t.Fatalf("expected 2 steps, got %v", f.data["steps"])
 	}
-	if steps[0].(map[string]any)["stage"] != "preparing" || steps[1].(map[string]any)["stage"] != "evaluating" {
+	if steps[0].(map[string]any)["stage"] != "preparing" || steps[1].(map[string]any)["stage"] != "starting" {
 		t.Errorf("unexpected step stages: %v", steps)
 	}
 	if steps[0].(map[string]any)["timestamp"] == "" {
@@ -150,24 +150,80 @@ func TestSSEReporter_PreviewCommandLabel(t *testing.T) {
 	}
 }
 
+func TestSSEReporter_ChatEnvelope_Completed(t *testing.T) {
+	rec, r := newRecorderReporter(t, "chat")
+
+	r.Report(context.Background(), Event{Stage: StageThinking, Message: "Searching your notes…"})
+	r.Report(context.Background(), Event{
+		Stage: StageCompleted,
+		Data: map[string]any{
+			"output":   map[string]any{"role": "ASSISTANT", "content": "Here you go"},
+			"metadata": map[string]any{"model": "x"},
+		},
+	})
+
+	frames := parseSSEFrames(t, rec.Body.String())
+	if len(frames) != 2 || frames[0].event != "thinking" || frames[1].event != "completed" {
+		t.Fatalf("expected [thinking, completed], got %q", rec.Body.String())
+	}
+	f := frames[1]
+	if f.data["command"] != "chat" {
+		t.Errorf("expected command 'chat', got %v", f.data["command"])
+	}
+	if _, hasFeedback := f.data["feedback"]; hasFeedback {
+		t.Errorf("chat envelope must not carry a feedback key: %v", f.data)
+	}
+	out, ok := f.data["output"].(map[string]any)
+	if !ok || out["content"] != "Here you go" {
+		t.Fatalf("expected output object, got %v", f.data["output"])
+	}
+	if md, ok := f.data["metadata"].(map[string]any); !ok || md["model"] != "x" {
+		t.Errorf("expected metadata carried, got %v", f.data["metadata"])
+	}
+	if steps, _ := f.data["steps"].([]any); len(steps) != 1 {
+		t.Errorf("expected 1 step, got %v", f.data["steps"])
+	}
+}
+
+func TestSSEReporter_ChatEnvelope_Failed(t *testing.T) {
+	rec, r := newRecorderReporter(t, "chat")
+
+	r.Report(context.Background(), Event{
+		Stage:   StageFailed,
+		Error:   "chat failed: worker exited",
+		Message: "We couldn't generate a response. Please try again.",
+	})
+
+	f := parseSSEFrames(t, rec.Body.String())[0]
+	if f.event != "failed" {
+		t.Fatalf("expected 'failed', got %q", f.event)
+	}
+	if v, ok := f.data["output"]; !ok || v != nil {
+		t.Errorf("expected output null, got %v (present=%v)", v, ok)
+	}
+	if f.data["error"] != "chat failed: worker exited" {
+		t.Errorf("raw error not carried: %v", f.data["error"])
+	}
+}
+
 func TestSSEReporter_DedupLifecycleStagesOncePerRequest(t *testing.T) {
 	rec, r := newRecorderReporter(t, "evaluate")
-	// The per-case evaluation loop re-emits preparing/evaluating once per
-	// case; only the first of each for the whole request is kept.
-	for _, s := range []Stage{StagePreparing, StagePreparing, StageEvaluating, StageEvaluating, StageProgress, StagePreparing} {
+	// The per-case evaluation loop re-emits the shim's preparing/starting
+	// markers once per case; only the first of each for the whole request
+	// is kept. Worker-authored evaluating sub-steps are never collapsed.
+	for _, s := range []Stage{StagePreparing, StagePreparing, StageStarting, StageStarting, StageEvaluating, StageEvaluating, StageStarting} {
 		r.Report(context.Background(), Event{Stage: s})
 	}
 	r.Report(context.Background(), Event{Stage: StageCompleted, Data: map[string]any{"feedback": []map[string]any{}}})
 
 	frames := parseSSEFrames(t, rec.Body.String())
 
-	// Live frames: one preparing, one evaluating, one progress, then completed.
 	var liveEvents []string
 	for _, f := range frames[:len(frames)-1] {
 		liveEvents = append(liveEvents, f.event)
 	}
-	if strings.Join(liveEvents, ",") != "preparing,evaluating,progress" {
-		t.Errorf("expected live frames [preparing evaluating progress], got %v", liveEvents)
+	if strings.Join(liveEvents, ",") != "preparing,starting,evaluating,evaluating" {
+		t.Errorf("expected live frames [preparing starting evaluating evaluating], got %v", liveEvents)
 	}
 
 	steps := frames[len(frames)-1].data["steps"].([]any)
@@ -175,7 +231,7 @@ func TestSSEReporter_DedupLifecycleStagesOncePerRequest(t *testing.T) {
 	for _, s := range steps {
 		got = append(got, s.(map[string]any)["stage"].(string))
 	}
-	want := []string{"preparing", "evaluating", "progress"}
+	want := []string{"preparing", "starting", "evaluating", "evaluating"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("expected steps %v, got %v", want, got)
 	}

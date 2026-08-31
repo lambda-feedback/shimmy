@@ -176,6 +176,36 @@ func TestOpenAPIMiddleware_SSEEvaluate_BypassesResponseValidation(t *testing.T) 
 	assert.True(t, flushed, "handler should receive a flushable writer")
 }
 
+func TestOpenAPIMiddleware_SSEChat_BypassesResponseValidation(t *testing.T) {
+	middleware := mustMiddleware(t)
+
+	body := mustJSON(t, map[string]any{
+		"messages": []map[string]any{{"role": "USER", "content": "hello"}},
+	})
+
+	var flushed bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("event: completed\ndata: {}\n\n")) //nolint:errcheck
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+			flushed = true
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	w := httptest.NewRecorder()
+	middleware(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "text/event-stream", w.Header().Get("Content-Type"))
+	assert.Equal(t, "event: completed\ndata: {}\n\n", w.Body.String())
+	assert.True(t, flushed, "handler should receive a flushable writer")
+}
+
 func TestOpenAPIMiddleware_SSEEvaluate_RequestStillValidated(t *testing.T) {
 	middleware := mustMiddleware(t)
 

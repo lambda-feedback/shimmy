@@ -203,7 +203,7 @@ func TestStdioAdapter_Send_RelaysWorkerProgressEvents(t *testing.T) {
 	}, time.Second, 5*time.Millisecond, "expected the worker's progress event to be relayed")
 
 	events := r.recorded()
-	assert.Equal(t, progress.StageProgress, events[0].Stage)
+	assert.Equal(t, progress.StageEvaluating, events[0].Stage)
 	assert.Equal(t, "eval", events[0].Command)
 	assert.Equal(t, "checking correctness", events[0].Message)
 }

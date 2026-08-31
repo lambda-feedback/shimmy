@@ -57,8 +57,8 @@ func TestSidecar_Accept_RelaysEventThroughBoundReporter(t *testing.T) {
 
 	events := waitForEvents(t, r, 1)
 	evt := events[0]
-	if evt.Stage != StageProgress {
-		t.Errorf("expected stage %q, got %q", StageProgress, evt.Stage)
+	if evt.Stage != StageEvaluating {
+		t.Errorf("expected stage %q, got %q", StageEvaluating, evt.Stage)
 	}
 	if evt.Command != "eval" {
 		t.Errorf("expected command %q, got %q", "eval", evt.Command)
@@ -82,8 +82,34 @@ func TestSidecar_IgnoresWorkerSuppliedStage(t *testing.T) {
 	}
 
 	events := waitForEvents(t, r, 1)
-	if events[0].Stage != StageProgress {
+	if events[0].Stage != StageEvaluating {
 		t.Errorf("worker-supplied stage must be ignored, got %q", events[0].Stage)
+	}
+}
+
+func TestSidecar_StageFollowsBoundCommand(t *testing.T) {
+	cases := map[string]Stage{
+		"eval":        StageEvaluating,
+		"preview":     StageEvaluating,
+		"chat":        StageThinking,
+		"chat/health": StageThinking,
+	}
+	for command, wantStage := range cases {
+		t.Run(command, func(t *testing.T) {
+			s := newTestSidecar(t, SidecarConfig{})
+			r := &recordingReporter{}
+			s.Bind(command, r)
+
+			resp := postSidecar(t, s, `{"message":"working…"}`)
+			if resp.StatusCode != http.StatusAccepted {
+				t.Fatalf("expected 202, got %d", resp.StatusCode)
+			}
+
+			evt := waitForEvents(t, r, 1)[0]
+			if evt.Stage != wantStage {
+				t.Errorf("command %q: expected stage %q, got %q", command, wantStage, evt.Stage)
+			}
+		})
 	}
 }
 

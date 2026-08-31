@@ -201,9 +201,9 @@ Example request using cases:
 
 ### Progress Events
 
-The shim also exposes a µEd-compatible endpoint at `POST /evaluate` (see the [µEd spec](https://mued.org/spec)), separate from the legacy `POST /` endpoint documented above. When a client calls `/evaluate` with a `callbackUrl` in the request body, the shim POSTs a small JSON event to that URL at each stage of processing — in addition to, not instead of, the normal synchronous HTTP response.
+The shim also exposes µEd-compatible endpoints at `POST /evaluate` and `POST /chat` (see the [µEd spec](https://mued.org/spec)), separate from the legacy `POST /` endpoint documented above. When a client calls either with a `callbackUrl` in the request body, the shim POSTs a small JSON event to that URL at each stage of processing — in addition to, not instead of, the normal synchronous HTTP response.
 
-This lets a caller show progress to the end user (e.g. "Evaluating your submission…") without polling, and without the shim needing to hold a connection open. It works identically whether the shim is deployed standalone or on AWS Lambda.
+This lets a caller show progress to the end user (e.g. "Starting…") without polling, and without the shim needing to hold a connection open. It works identically whether the shim is deployed standalone or on AWS Lambda.
 
 To opt in, include `callbackUrl` in the request body and, optionally, an `X-Request-Id` header — both are part of the µEd spec's own request contract, not shim-specific additions. Every event echoes back the `X-Request-Id` value verbatim so the caller can correlate it with the original request.
 
@@ -215,25 +215,27 @@ To opt in, include `callbackUrl` in the request body and, optionally, an `X-Requ
 }
 ```
 
-Four stages are emitted, in order, for a successful evaluation:
+Stages, in order:
 
-| Stage | Meaning |
-|-------|---------|
-| `preparing` | The evaluation environment is being set up (a worker is ready — freshly booted or reused). |
-| `evaluating` | The evaluation function is being invoked. |
-| `completed` | Feedback has been computed. `data.feedback` carries the same array returned in the synchronous response body. |
-| `failed` | A terminal failure occurred at some stage. `message` is safe to show to an end user; `error` carries raw technical detail for logs only. |
+| Stage | Producer | Meaning |
+|-------|----------|---------|
+| `preparing` | shim | A worker is being made ready (freshly booted or reused from the pool). Emitted once per request. |
+| `starting` | shim | The worker is about to be invoked. Emitted once per request. |
+| `evaluating` | worker | A progress checkpoint the evaluation function reported during an `/evaluate` (or `/preview`) call. Zero or more, in the function's own order. |
+| `thinking` | worker | The `/chat` equivalent of `evaluating` — a checkpoint the chat function reported. |
+| `completed` | shim | The result has been computed. For `/evaluate`, `data.feedback` carries the same array as the synchronous body; for `/chat`, `data.output` carries the message. |
+| `failed` | shim | A terminal failure occurred. `message` is safe to show to an end user; `error` carries raw technical detail for logs only. |
 
-`completed` and `failed` are terminal — at most one of them is delivered per request, whichever occurs first.
+`completed` and `failed` are terminal — at most one of them is delivered per request, whichever occurs first. `preparing` and `starting` are each delivered at most once even for a multi-case evaluation that internally re-enters those stages per case.
 
 Example event body:
 
 ```json
 {
   "correlationId": "req-7c193f38",
-  "stage": "evaluating",
+  "stage": "starting",
   "command": "eval",
-  "message": "Evaluating your submission…",
+  "message": "Starting…",
   "timestamp": "2026-08-04T14:23:01.512Z"
 }
 ```
@@ -270,48 +272,50 @@ A rejected callback URL behaves like any other delivery failure: it's logged and
 
 #### Streaming progress on the response itself (Server-Sent Events)
 
-A caller that would rather receive progress on the `/evaluate` response than stand up a
-`callbackUrl` receiver can opt in with an `Accept: text/event-stream` request header. The
-shim then keeps the response open and streams [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
-as the evaluation runs, instead of the buffered `Feedback[]` JSON body.
+A caller that would rather receive progress on the `/evaluate` or `/chat` response than
+stand up a `callbackUrl` receiver can opt in with an `Accept: text/event-stream` request
+header. The shim then keeps the response open and streams [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
+as the request runs, instead of the buffered JSON body.
 
 - **Standalone / `serve` mode only.** Under AWS Lambda the proxy buffers the whole response,
   so the `Accept` header is ignored and the normal buffered JSON body is returned. Disable it
   everywhere with `--progress-stream-enabled=false`.
 - Works alongside `callbackUrl`: if a request carries both, every event is delivered to the
   stream **and** POSTed to the callback.
-- The connection is bound to the request context — if the caller disconnects, the evaluation
-  is cancelled.
+- The connection is bound to the request context — if the caller disconnects, the work is
+  cancelled.
 
 Each non-terminal event is written as its own frame the moment it occurs, so the caller sees
-progress live:
+progress live (`/evaluate` shown; `/chat` is identical but with `thinking` frames in place
+of `evaluating`):
 
 ```
 event: preparing
-data: {"stage":"preparing","message":"Preparing your evaluation…","timestamp":"2026-08-31T09:16:29.474Z"}
+data: {"stage":"preparing","message":"Preparing…","timestamp":"2026-08-31T09:16:29.474Z"}
+
+event: starting
+data: {"stage":"starting","message":"Starting…","timestamp":"2026-08-31T09:16:29.474Z"}
 
 event: evaluating
-data: {"stage":"evaluating","message":"Evaluating your submission…","timestamp":"2026-08-31T09:16:29.474Z"}
-
-event: progress
-data: {"stage":"progress","message":"Ran 3/10 cases","data":{"completed":3,"total":10},"timestamp":"2026-08-31T09:16:29.522Z"}
+data: {"stage":"evaluating","message":"Ran 3/10 cases","data":{"completed":3,"total":10},"timestamp":"2026-08-31T09:16:29.522Z"}
 ```
 
-`preparing` and `evaluating` are streamed **once per request** even though a multi-case
-evaluation re-enters those stages per case; worker-authored `progress` events are streamed
-every time. The `event:` line carries the stage; the `data` payload is a self-contained step
-object (`stage`, `message`, optional `data`, `timestamp`).
+`preparing` and `starting` (the shim's own markers) are streamed **once per request** even
+though a multi-case evaluation re-enters them per case; worker-authored `evaluating` /
+`thinking` sub-steps are streamed every time. The `event:` line carries the stage; the
+`data` payload is a self-contained step object (`stage`, `message`, optional `data`,
+`timestamp`).
 
 The stream then ends with exactly one terminal frame — `event: completed` or `event: failed`
-— carrying the feedback plus every step that preceded it, and the connection closes:
+— carrying the result plus every step that preceded it, and the connection closes:
 
 ```
 event: completed
 data: {"command":"evaluate",
        "feedback":[{"awardedPoints":1,"message":"Well done"}],
-       "steps":[{"stage":"preparing","message":"Preparing your evaluation…","timestamp":"…"},
-                {"stage":"evaluating","message":"Evaluating your submission…","timestamp":"…"},
-                {"stage":"progress","message":"Ran 3/10 cases","data":{"completed":3,"total":10},"timestamp":"…"}]}
+       "steps":[{"stage":"preparing","message":"Preparing…","timestamp":"…"},
+                {"stage":"starting","message":"Starting…","timestamp":"…"},
+                {"stage":"evaluating","message":"Ran 3/10 cases","data":{"completed":3,"total":10},"timestamp":"…"}]}
 ```
 
 ```
@@ -322,19 +326,31 @@ data: {"command":"evaluate","feedback":null,
        "message":"We couldn't evaluate your answer. Please try again."}
 ```
 
+For `/chat` the terminal frame carries `output` (and optional `metadata`) instead of
+`feedback`:
+
+```
+event: completed
+data: {"command":"chat",
+       "output":{"role":"ASSISTANT","content":"…"},
+       "metadata":{ /* optional, worker-supplied */ },
+       "steps":[ /* preparing, starting, thinking… */ ]}
+```
+A failed `/chat` frame has `"output":null` plus `error`/`message`.
+
 Each element of the terminal frame's `steps[]` is byte-identical to the `data` payload of the
 live frame that carried it. The HTTP status is `200` even for a `failed` frame — the failure
-is in-band. `command` is `"evaluate"` or `"preview"`. The correlation id is in the
+is in-band. `command` is `"evaluate"`, `"preview"`, or `"chat"`. The correlation id is in the
 `X-Request-Id` response header, not the body. Response headers: `Content-Type:
 text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`, no `Content-Length`.
 
-While the evaluation runs, the shim also writes an SSE comment heartbeat (`: ping`) every
+While the request runs, the shim also writes an SSE comment heartbeat (`: ping`) every
 `--progress-stream-heartbeat-seconds` seconds (default `15`; `0` disables) so an idle
 connection isn't dropped by an intermediary.
 
 #### Custom progress events from the evaluation function
 
-The four stages above are emitted by shimmy itself, around the evaluation function call as a whole — `evaluating` covers the entire invocation as one span. An evaluation function that does multiple steps internally (e.g. several model calls) can emit its own progress events *during* that span, which are relayed through the same `callbackUrl` alongside shimmy's own events.
+The `preparing` and `starting` stages are emitted by shimmy itself, around the worker call as a whole. An evaluation or chat function that does multiple steps internally (e.g. several model calls) can emit its own progress events *during* that span, which are relayed through the same `callbackUrl` (and SSE stream) alongside shimmy's own events.
 
 When a request opts in to progress reporting (via `callbackUrl`), shimmy starts a loopback-only HTTP listener and passes its address to the evaluation function process as the `EVAL_PROGRESS_URL` environment variable, the same way it passes `EVAL_RPC_TRANSPORT`, `EVAL_FILE_NAME_REQUEST`, etc. (see [Communication Channels](#communication-channels) below). This works identically regardless of interface (`rpc` or `file`) or RPC transport, and regardless of the evaluation function's language — it only needs to be able to make an HTTP POST.
 

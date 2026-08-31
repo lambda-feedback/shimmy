@@ -149,13 +149,15 @@ func TestServeEvaluate_SSE_StreamsLiveStepFrames(t *testing.T) {
 	mockHandler.On("Handle", mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
 			ctx := args.Get(0).(context.Context)
-			// Shim lifecycle events, emitted twice as the per-case loop
-			// would; only the first of each should reach the wire.
-			progress.Emit(ctx, progress.Event{Stage: progress.StagePreparing, Message: "Preparing your evaluation…"})
-			progress.Emit(ctx, progress.Event{Stage: progress.StageEvaluating, Message: "Evaluating your submission…"})
-			progress.Emit(ctx, progress.Event{Stage: progress.StageProgress, Message: "Parsing response and answer..."})
-			progress.Emit(ctx, progress.Event{Stage: progress.StageProgress, Message: "Comparing sets for equivalence..."})
-			progress.Emit(ctx, progress.Event{Stage: progress.StagePreparing, Message: "Preparing your evaluation…"})
+			// Shim lifecycle markers, emitted twice as the per-case loop
+			// would; only the first of each reaches the wire. Worker
+			// sub-steps come in as StageEvaluating and are never collapsed.
+			progress.Emit(ctx, progress.Event{Stage: progress.StagePreparing, Message: "Preparing…"})
+			progress.Emit(ctx, progress.Event{Stage: progress.StageStarting, Message: "Starting…"})
+			progress.Emit(ctx, progress.Event{Stage: progress.StageEvaluating, Message: "Parsing response and answer..."})
+			progress.Emit(ctx, progress.Event{Stage: progress.StageEvaluating, Message: "Comparing sets for equivalence..."})
+			progress.Emit(ctx, progress.Event{Stage: progress.StagePreparing, Message: "Preparing…"})
+			progress.Emit(ctx, progress.Event{Stage: progress.StageStarting, Message: "Starting…"})
 		}).
 		Return(evalHandlerResponse(true, "Well done"))
 
@@ -168,10 +170,10 @@ func TestServeEvaluate_SSE_StreamsLiveStepFrames(t *testing.T) {
 	for _, f := range frames {
 		events = append(events, f.event)
 	}
-	assert.Equal(t, []string{"preparing", "evaluating", "progress", "progress", "completed"}, events)
+	assert.Equal(t, []string{"preparing", "starting", "evaluating", "evaluating", "completed"}, events)
 
-	// The first live frame's data is one step object, identical in shape
-	// to an element of the terminal frame's steps[].
+	// A live frame's data is one step object, identical in shape to an
+	// element of the terminal frame's steps[].
 	assert.Equal(t, "preparing", frames[0].data["stage"])
 	assert.Equal(t, "Parsing response and answer...", frames[2].data["message"])
 
@@ -179,7 +181,8 @@ func TestServeEvaluate_SSE_StreamsLiveStepFrames(t *testing.T) {
 	require.True(t, ok)
 	require.Len(t, steps, 4)
 	assert.Equal(t, "preparing", steps[0].(map[string]any)["stage"])
-	assert.Equal(t, "progress", steps[3].(map[string]any)["stage"])
+	assert.Equal(t, "starting", steps[1].(map[string]any)["stage"])
+	assert.Equal(t, "evaluating", steps[3].(map[string]any)["stage"])
 }
 
 func TestServeEvaluate_SSE_Preview(t *testing.T) {
