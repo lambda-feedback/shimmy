@@ -36,7 +36,37 @@ type SandboxConfig struct {
 	// DisableNetwork removes network access inside the sandbox.
 	DisableNetwork bool `conf:"disable_network"`
 
-	// Seccomp enables syscall filtering via seccomp-bpf using nsjail's
-	// built-in default policy. Requires kernel seccomp support.
-	Seccomp bool `conf:"seccomp"`
+	// DisableCloneNewpid keeps the worker in the host PID namespace. Some
+	// constrained hosts (rootless Podman, locked-down Fargate) reject a nested
+	// PID namespace, which surfaces as "pthread_create ... Invalid argument".
+	DisableCloneNewpid bool `conf:"disable_clone_newpid"`
+
+	// DisableCloneNewipc keeps the worker in the host IPC namespace.
+	DisableCloneNewipc bool `conf:"disable_clone_newipc"`
+
+	// DisableCloneNewuts keeps the worker in the host UTS namespace.
+	DisableCloneNewuts bool `conf:"disable_clone_newuts"`
+
+	// DisableCloneNewcgroup keeps the worker in the host cgroup namespace.
+	DisableCloneNewcgroup bool `conf:"disable_clone_newcgroup"`
+
+	// CloneNewuser controls the user namespace: "" / "auto" drops it only when
+	// shimmy runs as uid 0 (the usual container case, where nested CLONE_NEWUSER
+	// is blocked); "enabled" always keeps it (rootless Podman needs it);
+	// "disabled" always drops it.
+	CloneNewuser string `conf:"clone_newuser"`
+
+	// SeccompPolicyFile is the path to a kafel seccomp policy file, passed to
+	// nsjail as --seccomp_policy. Empty = no seccomp filtering (nsjail still
+	// sets NO_NEW_PRIVS by default). Mutually exclusive with SeccompString.
+	SeccompPolicyFile string `conf:"seccomp_policy_file"`
+
+	// SeccompString is an inline kafel seccomp policy, passed to nsjail as
+	// --seccomp_string. Mutually exclusive with SeccompPolicyFile.
+	SeccompString string `conf:"seccomp_string"`
+
+	// Verbose lets nsjail log to stderr at its default verbosity. When false
+	// (the default) nsjail runs with --quiet: only warnings, errors and fatal
+	// cmdline/namespace failures reach stderr.
+	Verbose bool `conf:"verbose"`
 }
