@@ -270,7 +270,27 @@ Enable sandboxing with `--sandbox` and configure it with the flags below:
 | `--sandbox-memory-mb` | `SANDBOX_MEMORY_LIMIT` | `0` (unlimited) | Memory limit in megabytes |
 | `--sandbox-max-fds` | `SANDBOX_MAX_FDS` | `0` (nsjail default) | Maximum open file descriptors |
 | `--sandbox-disable-network` | `SANDBOX_DISABLE_NETWORK` | `false` | Disable network access inside the sandbox |
-| `--sandbox-seccomp` | `SANDBOX_SECCOMP` | `false` | Enable seccomp syscall filtering |
+| `--sandbox-seccomp-policy-file` | `SANDBOX_SECCOMP_POLICY_FILE` | — | Path to a [kafel](https://github.com/google/kafel) seccomp policy file |
+| `--sandbox-seccomp-string` | `SANDBOX_SECCOMP_STRING` | — | Inline kafel seccomp policy (mutually exclusive with the file) |
+| `--sandbox-disable-clone-newpid` | `SANDBOX_DISABLE_CLONE_NEWPID` | `false` | Keep the worker in the host PID namespace |
+| `--sandbox-disable-clone-newipc` | `SANDBOX_DISABLE_CLONE_NEWIPC` | `false` | Keep the worker in the host IPC namespace |
+| `--sandbox-disable-clone-newuts` | `SANDBOX_DISABLE_CLONE_NEWUTS` | `false` | Keep the worker in the host UTS namespace |
+| `--sandbox-disable-clone-newcgroup` | `SANDBOX_DISABLE_CLONE_NEWCGROUP` | `false` | Keep the worker in the host cgroup namespace |
+| `--sandbox-clone-newuser` | `SANDBOX_CLONE_NEWUSER` | `auto` | User namespace: `auto` (drop when running as uid 0), `enabled` (always keep), `disabled` (always drop) |
+| `--sandbox-verbose` | `SANDBOX_VERBOSE` | `false` | Let nsjail log to stderr at full verbosity (default: warnings and errors only) |
+
+List-valued `SANDBOX_*` env vars are **comma-separated**, e.g. `SANDBOX_RO_BINDS=/usr,/bin,/lib,/lib64`.
+
+The worker process inherits shimmy's environment (`PATH`, `AWS_*`, …) and, unless
+`--cwd` is set, its working directory — so a sandboxed worker behaves like a
+non-sandboxed one. `nsjail` runs `execve` (not a `PATH` search), but shimmy resolves
+the command against `PATH` before handing it over, so a bare `-c python3` still works.
+nsjail's own diagnostics (including cmdline-parse and namespace-setup failures) go to
+shimmy's stderr.
+
+seccomp is off unless you supply an explicit kafel policy; nsjail always applies
+`NO_NEW_PRIVS` regardless. Writing a policy that covers your evaluation runtime's
+syscall surface (NumPy, Matplotlib, …) is up to you.
 
 A typical invocation for an untrusted Python worker:
 
@@ -288,6 +308,24 @@ shimmy -c python3 -a evaluation.py \
 
 > **Note:** nsjail requires either root or user namespace support. In Docker, pass `--privileged` or grant `CAP_SYS_ADMIN`. In Kubernetes, configure the pod's security context accordingly.
 
+#### Constrained hosts (rootless Podman, locked-down Fargate)
+
+The mount namespace (`CLONE_NEWNS`) is always created — it is what makes the
+bind-mount filesystem confinement work — but the other namespaces can be turned off
+for hosts that reject nesting them:
+
+- If the worker fails to start a thread (`pthread_create ... Invalid argument`) or
+  nsjail reports a namespace-setup error, disable the PID / IPC / UTS / cgroup
+  namespaces with `--sandbox-disable-clone-newpid` (and the `-newipc` / `-newuts` /
+  `-newcgroup` variants).
+- `--sandbox-clone-newuser` controls the user namespace. `auto` (default) drops it
+  when shimmy runs as uid 0, which is correct for most container deployments (AWS
+  ECS/Fargate, Kubernetes) where nested `CLONE_NEWUSER` is blocked. Under **rootless
+  Podman** the invoking user is mapped to uid 0 inside a user namespace and
+  `CLONE_NEWUSER` *is* needed — set `--sandbox-clone-newuser=enabled` there. Use
+  `disabled` to always skip it.
+- Alternatively, run the container rootful, or set up `newuidmap`/`newgidmap`.
+
 #### Testing sandboxing locally
 
 The sandbox integration tests verify actual security properties — filesystem isolation, CPU limits, network isolation, and stdio passthrough. They skip automatically if `nsjail` is not available.
@@ -295,7 +333,7 @@ The sandbox integration tests verify actual security properties — filesystem i
 **On Linux with nsjail installed:**
 
 ```shell
-go test -v -run 'TestSandboxedWorker' ./internal/execution/worker/...
+go test -v -run 'TestSandboxedWorker|TestApplySandbox' ./internal/execution/worker/...
 ```
 
 **On macOS (or any platform) via Docker or Podman:**
@@ -314,7 +352,7 @@ docker run --rm --privileged \
   -e FUNCTION_COMMAND=/bin/sh \
   -e FUNCTION_ARGS="-c,cat /etc/shadow" \
   -e SANDBOX_ENABLED=true \
-  -e SANDBOX_RO_BINDS="/usr:/bin:/lib:/lib64" \
+  -e SANDBOX_RO_BINDS="/usr,/bin,/lib,/lib64" \
   ghcr.io/lambda-feedback/shimmy serve
 ```
 

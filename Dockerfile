@@ -46,7 +46,7 @@ RUN make -j$(nproc)
 # Test-only stage: golang base image (Debian bookworm) + nsjail built from source.
 # Go is pre-installed; all nsjail build deps are in Debian main — no universe needed.
 # Used by `make test-sandbox`; not referenced by the production image.
-FROM golang:1.24 AS test-sandbox
+FROM golang:1.25 AS test-sandbox
 RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
     bison \
