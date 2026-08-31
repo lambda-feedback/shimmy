@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"go.uber.org/fx"
@@ -347,12 +346,11 @@ func (h *MuEdHandler) produceFeedback(resp runtime.Response, isPreview bool) ([]
 }
 
 // serveEvaluateStream handles a POST /evaluate request that opted in to
-// SSE streaming. It commits a 200 + event-stream headers immediately,
-// keeps the connection alive with heartbeats while the evaluation runs,
-// and emits exactly one terminal frame (completed | failed) carrying the
-// feedback plus every step that preceded it. Because the status is
-// already committed, every post-Handle outcome — including an internal
-// error — becomes a "failed" frame, never an HTTP error.
+// SSE streaming. The streaming scaffold (headers, reporter, heartbeats,
+// terminal frame) lives in streamProgress; this only supplies the run
+// step. Because the 200 is committed before the worker runs, every
+// post-Handle outcome — including an internal error — becomes a "failed"
+// frame, never an HTTP error.
 func (h *MuEdHandler) serveEvaluateStream(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -368,74 +366,15 @@ func (h *MuEdHandler) serveEvaluateStream(
 		cmdLabel = "preview"
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.Header().Set(muEdVersionHeader, version)
-	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
-
-	sseReporter, err := progress.NewSSEReporter(w, cmdLabel, h.log)
-	if err != nil {
-		// Guarded against by the caller; don't panic if it slips through.
-		h.log.Error("failed to create SSE reporter", zap.Error(err))
-		return
-	}
-
-	var reporter progress.Reporter = sseReporter
-	if callbackURL != "" {
-		cbReporter, cbErr := h.progressFactory.NewReporter(callbackURL, requestID)
-		if cbErr != nil {
-			h.log.Warn("invalid callbackUrl, disabling callback delivery", zap.Error(cbErr))
-		} else if cbReporter != nil {
-			reporter = progress.NewMultiReporter(sseReporter, cbReporter)
-		}
-	}
-	ctx = progress.ContextWithReporter(ctx, reporter)
-
-	done := make(chan struct{})
-	var hbWG sync.WaitGroup
-	if secs := h.config.Progress.Stream.HeartbeatSeconds; secs > 0 {
-		hbWG.Add(1)
-		go func() {
-			defer hbWG.Done()
-			ticker := time.NewTicker(time.Duration(secs) * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-done:
-					return
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					sseReporter.Heartbeat()
-				}
+	h.streamProgress(ctx, w, cmdLabel, string(command), "Feedback is ready.", version, callbackURL, requestID,
+		func(ctx context.Context) (map[string]any, *terminalError) {
+			resp := h.handler.Handle(ctx, req)
+			feedback, termErr := h.produceFeedback(resp, isPreview)
+			if termErr != nil {
+				return nil, termErr
 			}
-		}()
-	}
-
-	resp := h.handler.Handle(ctx, req)
-
-	feedback, termErr := h.produceFeedback(resp, isPreview)
-	if termErr != nil {
-		progress.Emit(ctx, progress.Event{
-			Stage:   progress.StageFailed,
-			Command: string(command),
-			Message: termErr.userMessage,
-			Error:   termErr.rawError,
+			return map[string]any{"feedback": feedback}, nil
 		})
-	} else {
-		progress.Emit(ctx, progress.Event{
-			Stage:   progress.StageCompleted,
-			Command: string(command),
-			Message: "Feedback is ready.",
-			Data:    map[string]any{"feedback": feedback},
-		})
-	}
-
-	close(done)
-	hbWG.Wait()
 }
 
 // muEdErrorMessageFromBody best-effort extracts a human-readable message

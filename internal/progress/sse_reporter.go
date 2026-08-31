@@ -22,9 +22,10 @@ type sseStep struct {
 	Timestamp time.Time      `json:"timestamp"`
 }
 
-// sseEnvelope is the JSON payload of the single terminal SSE frame. The
-// same shape is used for the "completed" and "failed" events: on failure
-// Feedback is null and Error/Message carry the detail.
+// sseEnvelope is the JSON payload of the single terminal SSE frame for an
+// /evaluate (or /preview) request. The same shape is used for the
+// "completed" and "failed" events: on failure Feedback is null and
+// Error/Message carry the detail.
 type sseEnvelope struct {
 	Command  string           `json:"command"`
 	Feedback []map[string]any `json:"feedback"`
@@ -33,30 +34,42 @@ type sseEnvelope struct {
 	Message  string           `json:"message,omitempty"`
 }
 
+// sseChatEnvelope is the terminal-frame payload for a /chat request. Chat
+// has no feedback[]; it returns an output object plus optional metadata.
+// On failure Output is null and Error/Message carry the detail.
+type sseChatEnvelope struct {
+	Command  string         `json:"command"`
+	Output   map[string]any `json:"output"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+	Steps    []sseStep      `json:"steps"`
+	Error    string         `json:"error,omitempty"`
+	Message  string         `json:"message,omitempty"`
+}
+
 // SSEReporter is a Reporter that streams progress back to the caller on
-// the /evaluate response itself, as Server-Sent Events. Each non-terminal
-// event is written immediately as its own frame (event: <stage>, data =
-// the step object) so the caller sees progress as it happens, and is also
-// accumulated; on completion/failure a single terminal frame
-// (event: completed | failed) carries the feedback plus every step that
-// preceded it, then the handler closes the connection.
+// the /evaluate or /chat response itself, as Server-Sent Events. Each
+// non-terminal event is written immediately as its own frame
+// (event: <stage>, data = the step object) so the caller sees progress as
+// it happens, and is also accumulated; on completion/failure a single
+// terminal frame (event: completed | failed) carries the result plus
+// every step that preceded it, then the handler closes the connection.
 //
 // Report is called concurrently — synchronously from the request
 // goroutine for shim-authored events, and from detached sidecar
-// goroutines for worker-authored "progress" events — so all state and
-// all writes to the ResponseWriter are guarded by mu.
+// goroutines for worker-authored sub-steps — so all state and all writes
+// to the ResponseWriter are guarded by mu.
 type SSEReporter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
 	command string
 	log     *zap.Logger
 
-	mu             sync.Mutex
-	steps          []sseStep
-	seenPreparing  bool
-	seenEvaluating bool
-	terminated     bool
-	terminalOnce   sync.Once
+	mu            sync.Mutex
+	steps         []sseStep
+	seenPreparing bool
+	seenStarting  bool
+	terminated    bool
+	terminalOnce  sync.Once
 }
 
 var _ Reporter = (*SSEReporter)(nil)
@@ -79,7 +92,7 @@ func NewSSEReporter(w http.ResponseWriter, command string, log *zap.Logger) (*SS
 
 // Report streams a non-terminal event as its own frame (and accumulates
 // it), or writes the single terminal frame. Once the terminal frame is
-// written, all further events (including a late worker "progress" relayed
+// written, all further events (including a late worker sub-step relayed
 // after the request returned) are dropped without touching the
 // ResponseWriter.
 func (r *SSEReporter) Report(_ context.Context, evt Event) {
@@ -98,21 +111,22 @@ func (r *SSEReporter) Report(_ context.Context, evt Event) {
 		return
 	}
 
-	// Collapse the lifecycle stages to their first occurrence for the
-	// whole request: the per-case evaluation loop re-enters the
-	// supervisor and re-emits preparing/evaluating once per case.
-	// Worker-authored "progress" events are never collapsed.
+	// Collapse the shim's lifecycle markers to their first occurrence for
+	// the whole request: the per-case evaluation loop re-enters the
+	// supervisor and re-emits preparing/starting once per case.
+	// Worker-authored sub-steps (evaluating / thinking) are never
+	// collapsed — they sit on their own stages.
 	switch evt.Stage {
 	case StagePreparing:
 		if r.seenPreparing {
 			return
 		}
 		r.seenPreparing = true
-	case StageEvaluating:
-		if r.seenEvaluating {
+	case StageStarting:
+		if r.seenStarting {
 			return
 		}
-		r.seenEvaluating = true
+		r.seenStarting = true
 	}
 
 	step := sseStep{
@@ -122,8 +136,8 @@ func (r *SSEReporter) Report(_ context.Context, evt Event) {
 		Timestamp: evt.Timestamp,
 	}
 	if step.Timestamp.IsZero() {
-		// Worker-authored "progress" events bypass Emit and arrive
-		// without a timestamp.
+		// Worker-authored sub-steps bypass Emit (they come off the
+		// sidecar) and arrive without a timestamp.
 		step.Timestamp = time.Now().UTC()
 	}
 
@@ -132,29 +146,44 @@ func (r *SSEReporter) Report(_ context.Context, evt Event) {
 }
 
 func (r *SSEReporter) writeEnvelopeLocked(evt Event) {
-	env := sseEnvelope{
-		Command: r.command,
-		Steps:   r.steps,
+	steps := r.steps
+	if steps == nil {
+		steps = []sseStep{}
 	}
-	if env.Steps == nil {
-		env.Steps = []sseStep{}
-	}
+	failed := evt.Stage == StageFailed
 
 	event := "completed"
-	if evt.Stage == StageFailed {
+	if failed {
 		event = "failed"
-		env.Feedback = nil
-		env.Error = evt.Error
-		env.Message = evt.Message
-	} else {
-		feedback, ok := evt.Data["feedback"].([]map[string]any)
-		if !ok {
-			feedback = []map[string]any{}
-		}
-		env.Feedback = feedback
 	}
 
-	body, err := json.Marshal(env)
+	var payload any
+	if r.command == "chat" {
+		env := sseChatEnvelope{Command: r.command, Steps: steps}
+		if failed {
+			env.Error = evt.Error
+			env.Message = evt.Message
+		} else {
+			env.Output, _ = evt.Data["output"].(map[string]any)
+			env.Metadata, _ = evt.Data["metadata"].(map[string]any)
+		}
+		payload = env
+	} else {
+		env := sseEnvelope{Command: r.command, Steps: steps}
+		if failed {
+			env.Error = evt.Error
+			env.Message = evt.Message
+		} else {
+			feedback, ok := evt.Data["feedback"].([]map[string]any)
+			if !ok {
+				feedback = []map[string]any{}
+			}
+			env.Feedback = feedback
+		}
+		payload = env
+	}
+
+	body, err := json.Marshal(payload)
 	if err != nil {
 		r.log.Warn("failed to marshal SSE envelope", zap.String("event", event), zap.Error(err))
 		return

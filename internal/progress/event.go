@@ -11,10 +11,24 @@ const (
 	// (a worker is ready to receive work, whether freshly booted or reused
 	// from a warm pool). Deliberately named around what a student or
 	// teacher would recognise, not shimmy's internal "worker" concept.
+	// Emitted by shimmy itself, once per request.
 	StagePreparing Stage = "preparing"
 
-	// StageEvaluating indicates the submission is being evaluated.
+	// StageStarting indicates the worker is about to be invoked. Emitted by
+	// shimmy itself, once per request, for both /evaluate and /chat.
+	StageStarting Stage = "starting"
+
+	// StageEvaluating indicates a worker-authored sub-step during an
+	// /evaluate (or /preview) request, relayed from the worker's local
+	// progress side-channel (see Sidecar). A worker cannot claim any stage;
+	// the sidecar assigns this based on the command in flight.
 	StageEvaluating Stage = "evaluating"
+
+	// StageThinking indicates a worker-authored sub-step during a /chat
+	// request, relayed from the worker's local progress side-channel (see
+	// Sidecar). Like StageEvaluating, the sidecar assigns it by command;
+	// the worker cannot set it.
+	StageThinking Stage = "thinking"
 
 	// StageCompleted indicates feedback has been computed and is about
 	// to be returned to the caller.
@@ -23,11 +37,9 @@ const (
 	// StageFailed indicates a terminal failure at any layer of the pipeline.
 	StageFailed Stage = "failed"
 
-	// StageProgress indicates a custom, evaluation-function-authored
-	// progress update. Unlike the other stages, these are never emitted
-	// by shimmy itself — only relayed from a worker's local progress
-	// side-channel (see Sidecar). A worker cannot claim any other stage;
-	// the wire contract for that side-channel has no way to set Stage.
+	// StageProgress is retained for compatibility but is no longer emitted:
+	// worker-authored sub-steps are now relayed as StageEvaluating or
+	// StageThinking depending on the command in flight (see Sidecar).
 	StageProgress Stage = "progress"
 )
 
@@ -57,10 +69,10 @@ type Event struct {
 	Error string
 
 	// Data is a free-form extension point. On StageCompleted it carries
-	// the evaluation's feedback payload (so a callbackUrl-supplying
-	// caller gets the final result, not just a status ping). On
-	// StageProgress it carries whatever the evaluation function attached
-	// to its custom event (see Sidecar).
+	// the final result payload (so a callbackUrl-supplying caller gets the
+	// result, not just a status ping). On a worker-authored sub-step
+	// (StageEvaluating / StageThinking) it carries whatever the evaluation
+	// function attached to its custom event (see Sidecar).
 	Data map[string]any
 
 	// Timestamp is set by Emit, not by callers.

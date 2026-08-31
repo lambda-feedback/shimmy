@@ -84,12 +84,25 @@ func (c SidecarConfig) withDefaults() SidecarConfig {
 
 // sidecarPayload is the JSON body a worker POSTs to report a custom
 // progress event. There is deliberately no "stage" field: a worker can
-// never claim any stage other than StageProgress, which the sidecar
-// hardcodes itself. Unknown fields (including a "stage" a worker might
-// send anyway) are silently ignored by json.Decode, never merged in.
+// never choose its own stage. The sidecar assigns one from the command in
+// flight (see stageForCommand). Unknown fields (including a "stage" a
+// worker might send anyway) are silently ignored by json.Decode, never
+// merged in.
 type sidecarPayload struct {
 	Message string         `json:"message"`
 	Data    map[string]any `json:"data,omitempty"`
+}
+
+// stageForCommand maps the command bound to the sidecar onto the stage a
+// worker-authored sub-step is relayed under: chat commands report
+// "thinking", everything else (eval, preview, …) reports "evaluating".
+func stageForCommand(command string) Stage {
+	switch command {
+	case "chat", "chat/health":
+		return StageThinking
+	default:
+		return StageEvaluating
+	}
 }
 
 // Sidecar is a loopback-only HTTP listener that accepts worker-authored
@@ -255,7 +268,7 @@ func (s *Sidecar) handle(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusAccepted)
 
 	evt := Event{
-		Stage:   StageProgress,
+		Stage:   stageForCommand(command),
 		Command: command,
 		Message: body.Message,
 		Data:    body.Data,

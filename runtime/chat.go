@@ -44,6 +44,11 @@ type MuEdChatRequest struct {
 	User           map[string]any    `json:"user,omitempty"`
 	Context        map[string]any    `json:"context,omitempty"`
 	Configuration  map[string]any    `json:"configuration,omitempty"`
+
+	// CallbackUrl, when set, receives out-of-band progress events for this
+	// chat request, exactly as on /evaluate. Part of the µEd request
+	// contract, not a shim-specific field.
+	CallbackUrl *string `json:"callbackUrl,omitempty"`
 }
 
 type MuEdChatHealthStatus string

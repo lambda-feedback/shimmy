@@ -174,7 +174,7 @@ func (s *WorkerSupervisor) Send(
 		progress.Emit(ctx, progress.Event{
 			Stage:   progress.StageFailed,
 			Command: method,
-			Message: "We couldn't start the evaluation. Please try again.",
+			Message: "We couldn't start the request. Please try again.",
 			Error:   err.Error(),
 		})
 		return nil, fmt.Errorf("failed to acquire worker: %w", err)
@@ -182,22 +182,22 @@ func (s *WorkerSupervisor) Send(
 	progress.Emit(ctx, progress.Event{
 		Stage:   progress.StagePreparing,
 		Command: method,
-		Message: "Preparing your evaluation…",
+		Message: "Preparing…",
 	})
 
 	// NOTICE: unconventional error handling ahead, as we need
 	//         to release the worker before returning the error.
 	progress.Emit(ctx, progress.Event{
-		Stage:   progress.StageEvaluating,
+		Stage:   progress.StageStarting,
 		Command: method,
-		Message: "Evaluating your submission…",
+		Message: "Starting…",
 	})
 	resData, err := worker.Send(ctx, method, data, s.sendParams.Timeout)
 	if err != nil {
 		progress.Emit(ctx, progress.Event{
 			Stage:   progress.StageFailed,
 			Command: method,
-			Message: "Something went wrong while evaluating your answer. Please try again.",
+			Message: "Something went wrong. Please try again.",
 			Error:   err.Error(),
 		})
 	}
