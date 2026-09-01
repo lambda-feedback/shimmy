@@ -22,7 +22,7 @@ func TestOpenAPIMiddleware_Init(t *testing.T) {
 	spec, err := LoadOpenAPISpec()
 	require.NoError(t, err)
 
-	middleware, err := OpenAPIMiddleware(spec, zap.NewNop(), true)
+	middleware, err := OpenAPIMiddleware(spec, zap.NewNop())
 	require.NoError(t, err)
 	assert.NotNil(t, middleware)
 }
@@ -225,8 +225,12 @@ func TestOpenAPIMiddleware_SSEEvaluate_RequestStillValidated(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestOpenAPIMiddleware_SSEDisabled_StillBuffersAndValidates(t *testing.T) {
-	middleware := mustMiddleware(t, false)
+// A request that asks for an SSE stream but whose handler falls back to a
+// buffered JSON response (e.g. streaming not supported in this runtime)
+// must still be response-validated — the bypass keys on what the handler
+// wrote, not on the request's Accept header.
+func TestOpenAPIMiddleware_AcceptSSEButJSONResponse_StillValidated(t *testing.T) {
+	middleware := mustMiddleware(t)
 
 	body := mustJSON(t, map[string]any{
 		"submission": map[string]any{
@@ -251,17 +255,46 @@ func TestOpenAPIMiddleware_SSEDisabled_StillBuffersAndValidates(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
+// A streamed response is forwarded verbatim and left unvalidated even
+// when its body would fail the spec, and the handler still gets a
+// flushable writer.
+func TestOpenAPIMiddleware_StreamedResponse_ForwardedUnvalidated(t *testing.T) {
+	middleware := mustMiddleware(t)
+
+	body := mustJSON(t, map[string]any{
+		"submission": map[string]any{
+			"type":    "TEXT",
+			"content": map[string]any{"text": "hello"},
+		},
+	})
+
+	var flushed bool
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// no explicit WriteHeader — the sniffer must decide on first Write
+		w.Write([]byte("event: completed\ndata: {\"not\":\"an array\"}\n\n")) //nolint:errcheck
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+			flushed = true
+		}
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	middleware(next).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "event: completed\ndata: {\"not\":\"an array\"}\n\n", w.Body.String())
+	assert.True(t, flushed, "handler should receive a flushable writer")
+}
+
 // mustMiddleware loads the real spec and returns the initialised middleware, failing the test on error.
-// SSE streaming bypass is enabled unless sseEnabled[0] is explicitly false.
-func mustMiddleware(t *testing.T, sseEnabled ...bool) func(http.Handler) http.Handler {
+func mustMiddleware(t *testing.T) func(http.Handler) http.Handler {
 	t.Helper()
-	enabled := true
-	if len(sseEnabled) > 0 {
-		enabled = sseEnabled[0]
-	}
 	spec, err := LoadOpenAPISpec()
 	require.NoError(t, err)
-	middleware, err := OpenAPIMiddleware(spec, zap.NewNop(), enabled)
+	middleware, err := OpenAPIMiddleware(spec, zap.NewNop())
 	require.NoError(t, err)
 	return middleware
 }

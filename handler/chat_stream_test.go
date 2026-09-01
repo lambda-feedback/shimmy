@@ -14,6 +14,7 @@ import (
 
 	"github.com/lambda-feedback/shimmy/config"
 	"github.com/lambda-feedback/shimmy/internal/progress"
+	"github.com/lambda-feedback/shimmy/internal/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -245,6 +246,50 @@ func TestServeChat_SSE_Heartbeat(t *testing.T) {
 		require.NoError(t, err)
 	}
 	assert.True(t, sawPing, "expected at least one heartbeat before the completed frame")
+}
+
+// TestServeChat_SSE_TerminalPayloadValidated covers the terminal-frame
+// schema check: with the spec wired in, a worker response that would
+// violate the µEd ChatResponse schema is turned into a "failed" frame
+// rather than shipped as "completed".
+func TestServeChat_SSE_TerminalPayloadValidated(t *testing.T) {
+	spec, err := server.LoadOpenAPISpec()
+	require.NoError(t, err)
+
+	t.Run("valid payload still completes", func(t *testing.T) {
+		rt := new(MockRuntime)
+		rt.On("Chat", mock.Anything, mock.Anything).
+			Return(chatRuntimeResponse("ASSISTANT", "all good"), nil)
+
+		h := newChatStreamHandler(rt, nil, progress.StreamConfig{Enabled: true})
+		h.spec = spec
+
+		w := httptest.NewRecorder()
+		h.ServeChat(w, chatSSERequest(t, chatRequestBody(t)))
+
+		event, data := parseSSE(t, w.Body.String())
+		assert.Equal(t, "completed", event)
+		out := data["output"].(map[string]any)
+		assert.Equal(t, "all good", out["content"])
+	})
+
+	t.Run("schema-invalid payload becomes a failed frame", func(t *testing.T) {
+		rt := new(MockRuntime)
+		// "ROBOT" is not in the Message.role enum.
+		rt.On("Chat", mock.Anything, mock.Anything).
+			Return(chatRuntimeResponse("ROBOT", "hello"), nil)
+
+		h := newChatStreamHandler(rt, nil, progress.StreamConfig{Enabled: true})
+		h.spec = spec
+
+		w := httptest.NewRecorder()
+		h.ServeChat(w, chatSSERequest(t, chatRequestBody(t)))
+
+		assert.Equal(t, http.StatusOK, w.Result().StatusCode, "failure is in-band")
+		event, data := parseSSE(t, w.Body.String())
+		assert.Equal(t, "failed", event)
+		assert.Nil(t, data["output"])
+	})
 }
 
 // assertAnError is an error whose message contains "boom", for the failure-path test.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/getkin/kin-openapi/openapi3"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
@@ -56,6 +57,12 @@ type MuEdHandlerParams struct {
 	Log                 *zap.Logger
 	ProgressFactory     progress.Factory
 	StreamingCapability StreamingCapability
+
+	// Spec is the µEd OpenAPI spec, used to validate the SSE terminal
+	// frame payload (the streamed analogue of the buffered path's
+	// response validation). Optional: absent under AWS Lambda, which
+	// cannot stream anyway.
+	Spec *openapi3.T `optional:"true"`
 }
 
 type MuEdHandler struct {
@@ -65,6 +72,7 @@ type MuEdHandler struct {
 	log              *zap.Logger
 	progressFactory  progress.Factory
 	streamingCapable bool
+	spec             *openapi3.T
 }
 
 func NewMuEdHandler(params MuEdHandlerParams) *MuEdHandler {
@@ -75,6 +83,7 @@ func NewMuEdHandler(params MuEdHandlerParams) *MuEdHandler {
 		log:              params.Log,
 		progressFactory:  params.ProgressFactory,
 		streamingCapable: params.StreamingCapability.Enabled,
+		spec:             params.Spec,
 	}
 }
 

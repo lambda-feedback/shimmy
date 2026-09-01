@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/progress"
+	"github.com/lambda-feedback/shimmy/internal/server"
 )
 
 // streamProgress runs a request whose progress is streamed back on the
@@ -88,14 +89,22 @@ func (h *MuEdHandler) streamProgress(
 	}
 
 	data, termErr := run(ctx)
-	if termErr != nil {
+	switch {
+	case termErr != nil:
 		progress.Emit(ctx, progress.Event{
 			Stage:   progress.StageFailed,
 			Command: command,
 			Message: termErr.userMessage,
 			Error:   termErr.rawError,
 		})
-	} else {
+	case h.terminalFrameInvalid(cmdLabel, data):
+		progress.Emit(ctx, progress.Event{
+			Stage:   progress.StageFailed,
+			Command: command,
+			Message: "We couldn't produce a valid response. Please try again.",
+			Error:   "SSE terminal payload failed OpenAPI validation",
+		})
+	default:
 		progress.Emit(ctx, progress.Event{
 			Stage:   progress.StageCompleted,
 			Command: command,
@@ -106,4 +115,30 @@ func (h *MuEdHandler) streamProgress(
 
 	close(done)
 	hbWG.Wait()
+}
+
+// terminalFrameInvalid reports whether the terminal frame's data payload
+// fails the µEd response schema for the equivalent non-streaming body. It
+// gives the streamed path the schema guarantee the buffered path gets
+// from the OpenAPI response filter. A nil spec (e.g. under Lambda, which
+// never streams) or an unmapped command reports valid.
+func (h *MuEdHandler) terminalFrameInvalid(cmdLabel string, data map[string]any) bool {
+	var operationID string
+	var payload any
+	switch cmdLabel {
+	case "chat":
+		operationID, payload = "chat", data
+	case "evaluate":
+		operationID, payload = "evaluateSubmission", data["feedback"]
+	default:
+		// "preview" has no dedicated spec operation of its own.
+		return false
+	}
+
+	if err := server.ValidateResponseBody(h.spec, operationID, payload); err != nil {
+		h.log.Error("SSE terminal payload failed OpenAPI validation",
+			zap.String("command", cmdLabel), zap.Error(err))
+		return true
+	}
+	return false
 }

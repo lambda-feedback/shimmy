@@ -389,7 +389,7 @@ func TestServeEvaluate_SSE_Heartbeat(t *testing.T) {
 func TestServeEvaluate_SSE_ThroughOpenAPIMiddleware(t *testing.T) {
 	spec, err := server.LoadOpenAPISpec()
 	require.NoError(t, err)
-	mw, err := server.OpenAPIMiddleware(spec, zap.NewNop(), true)
+	mw, err := server.OpenAPIMiddleware(spec, zap.NewNop())
 	require.NoError(t, err)
 
 	mockHandler := new(MockHandler)

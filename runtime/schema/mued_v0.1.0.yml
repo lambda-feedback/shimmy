@@ -375,6 +375,19 @@ paths:
                     - feedbackId: fb-2
                       title: Overall structure
                       message: The overall structure of your answer is clear and easy to follow.
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Opt-in Server-Sent Events stream, selected with the request
+                  header `Accept: text/event-stream` (standalone/serve mode
+                  only; ignored under AWS Lambda). Intermediate frames:
+                  `event: starting | preparing | evaluating`, `data` = a
+                  `SseProgressStep` JSON object. Keep-alive `: ping` comment
+                  lines. Exactly one terminal frame: `event: completed | failed`,
+                  `data` = an `SseEvaluateTerminalFrame` JSON object. The HTTP
+                  status is 200 even for a `failed` frame — the failure is
+                  in-band.
         '202':
           $ref: '#/components/responses/202-Accepted'
         '400':
@@ -638,6 +651,18 @@ paths:
                         model: gpt-5.2
                         temperature: 0.5
                         outputTokens: 143
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Opt-in Server-Sent Events stream, selected with the request
+                  header `Accept: text/event-stream` (standalone/serve mode
+                  only; ignored under AWS Lambda). Intermediate frames:
+                  `event: starting | preparing | thinking`, `data` = a
+                  `SseProgressStep` JSON object. Keep-alive `: ping` comment
+                  lines. Exactly one terminal frame: `event: completed | failed`,
+                  `data` = a `SseChatTerminalFrame` JSON object. The HTTP status
+                  is 200 even for a `failed` frame — the failure is in-band.
         '400':
           $ref: '#/components/responses/400-BadRequest-2'
         '403':
@@ -1742,6 +1767,94 @@ components:
           description: Optional version of the chat service implementation.
         capabilities:
           $ref: '#/components/schemas/ChatCapabilities'
+    SseProgressStep:
+      type: object
+      description: |
+        Payload (`data`) of an intermediate SSE progress frame
+        (`event: starting | preparing | thinking | evaluating`). The same
+        shape also appears in `steps[]` of the terminal frame.
+      required:
+        - stage
+        - timestamp
+      properties:
+        stage:
+          type: string
+          description: Lifecycle stage this step reports.
+        message:
+          type: string
+          description: Short, learner/teacher-facing description of the step.
+        data:
+          type: object
+          additionalProperties: true
+          description: Free-form payload attached by a worker-authored sub-step.
+        timestamp:
+          type: string
+          format: date-time
+    SseChatTerminalFrame:
+      type: object
+      description: |
+        Payload (`data`) of the single terminal SSE frame for `POST /chat`
+        (`event: completed | failed`). On a `failed` frame `output` is null
+        and `error`/`message` carry the detail.
+      required:
+        - command
+        - steps
+      properties:
+        command:
+          type: string
+          description: The µEd command being processed (e.g. "chat").
+        output:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+          description: The generated assistant response; null on failure.
+        metadata:
+          type:
+            - object
+            - 'null'
+          additionalProperties: true
+          description: Optional metadata about response generation.
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/SseProgressStep'
+        error:
+          type: string
+          description: Raw technical detail (failure frames only; for logs/support).
+        message:
+          type: string
+          description: Human-facing status text.
+    SseEvaluateTerminalFrame:
+      type: object
+      description: |
+        Payload (`data`) of the single terminal SSE frame for
+        `POST /evaluate` (`event: completed | failed`). On a `failed` frame
+        `feedback` is null and `error`/`message` carry the detail.
+      required:
+        - command
+        - steps
+      properties:
+        command:
+          type: string
+          description: The µEd command being processed (e.g. "eval", "preview").
+        feedback:
+          type:
+            - array
+            - 'null'
+          items:
+            $ref: '#/components/schemas/Feedback'
+          description: The generated feedback items; null on failure.
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/SseProgressStep'
+        error:
+          type: string
+          description: Raw technical detail (failure frames only; for logs/support).
+        message:
+          type: string
+          description: Human-facing status text.
   responses:
     202-Accepted:
       description: Request accepted for asynchronous evaluation processing.
