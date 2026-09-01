@@ -26,9 +26,33 @@ func ValidateResponseBody(spec *openapi3.T, operationID string, payload any) err
 		return err
 	}
 
-	// Round-trip through JSON so VisitJSON sees the generic shapes it
-	// expects (map[string]any, []any, float64) rather than concrete Go
-	// types such as []map[string]any.
+	return validateAgainstSchema(schema, payload)
+}
+
+// ValidateComponentSchema checks payload against the named schema in
+// components/schemas. Like ValidateResponseBody, a nil spec is a no-op.
+// It is used by the SSE frame parity test to keep the hand-written
+// Sse* schemas in step with the structs progress emits.
+func ValidateComponentSchema(spec *openapi3.T, schemaName string, payload any) error {
+	if spec == nil {
+		return nil
+	}
+
+	if spec.Components == nil || spec.Components.Schemas == nil {
+		return fmt.Errorf("spec has no component schemas")
+	}
+	ref := spec.Components.Schemas[schemaName]
+	if ref == nil || ref.Value == nil {
+		return fmt.Errorf("component schema %q not found", schemaName)
+	}
+
+	return validateAgainstSchema(ref.Value, payload)
+}
+
+// validateAgainstSchema round-trips payload through JSON so VisitJSON
+// sees the generic shapes it expects (map[string]any, []any, float64)
+// rather than concrete Go types such as []map[string]any.
+func validateAgainstSchema(schema *openapi3.Schema, payload any) error {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("encoding response payload: %w", err)
@@ -37,7 +61,6 @@ func ValidateResponseBody(spec *openapi3.T, operationID string, payload any) err
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		return fmt.Errorf("decoding response payload: %w", err)
 	}
-
 	return schema.VisitJSON(decoded)
 }
 
