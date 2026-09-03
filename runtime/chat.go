@@ -3,8 +3,6 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
-
-	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 // ChatRequest is the dispatcher-level request for the chat command.
@@ -151,10 +149,12 @@ func MuEdToChatHealthResponse(result map[string]any, streamingEnabled bool) map[
 
 // chatProgressStages is the set of SseProgressStep.stage values a /chat
 // SSE stream can emit, advertised via capabilities.supportedProgressStages.
+// The literals mirror the progress.Stage* constants; they are inlined here
+// to keep the runtime package free of a dependency on internal/progress.
 var chatProgressStages = []string{
-	string(progress.StagePreparing),
-	string(progress.StageStarting),
-	string(progress.StageThinking),
-	string(progress.StageCompleted),
-	string(progress.StageFailed),
+	"preparing",
+	"starting",
+	"thinking",
+	"completed",
+	"failed",
 }

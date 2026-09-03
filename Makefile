@@ -25,14 +25,14 @@ test-unit:
 # Run sandbox integration tests inside a privileged container.
 # Supports Docker (default) and Podman: CONTAINER_ENGINE=podman make test-sandbox
 # On Linux with nsjail installed locally, use:
-#   go test -v -run 'TestSandboxedWorker' ./internal/execution/worker/...
+#   go test -v -run 'TestSandboxedWorker|TestApplySandbox' ./internal/execution/worker/...
 test-sandbox:
 	$(CONTAINER_ENGINE) build --target test-sandbox -t shimmy-test-sandbox .
 	$(CONTAINER_ENGINE) run --rm --privileged \
 	  -v $(shell pwd):/workspace \
 	  -w /workspace \
 	  shimmy-test-sandbox \
-	  go test -v -run 'TestSandboxedWorker' ./internal/execution/worker/...
+	  go test -v -run 'TestSandboxedWorker|TestApplySandbox' ./internal/execution/worker/...
 	
 lcov:
 	gcov2lcov -infile=coverage.out -outfile=lcov.info

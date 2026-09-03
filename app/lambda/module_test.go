@@ -13,7 +13,9 @@ import (
 
 // TestModule_DependencyGraphResolves guards the fx wiring for Lambda mode
 // given the globals app.New supplies. StreamingCapability is supplied
-// here as {Enabled: false} — the Lambda proxy cannot stream.
+// here as {Enabled: false} — the Lambda proxy cannot stream. It now also
+// pulls in server.HandlerModule so the Lambda adapter serves the same
+// OpenAPI-validated handler chain as the standalone server.
 func TestModule_DependencyGraphResolves(t *testing.T) {
 	cfg := config.Config{}
 

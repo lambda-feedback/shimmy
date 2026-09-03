@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 
 	"go.uber.org/zap"
@@ -39,6 +40,24 @@ func applySandbox(config StartConfig, cfg SandboxConfig) (StartConfig, error) {
 		return StartConfig{}, errors.New("cannot sandbox empty command")
 	}
 
+	if cfg.SeccompPolicyFile != "" && cfg.SeccompString != "" {
+		return StartConfig{}, errors.New("seccomp_policy_file and seccomp_string are mutually exclusive")
+	}
+	if cfg.SeccompPolicyFile != "" {
+		if _, err := os.Stat(cfg.SeccompPolicyFile); err != nil {
+			return StartConfig{}, fmt.Errorf("seccomp policy file %q: %w", cfg.SeccompPolicyFile, err)
+		}
+	}
+
+	// nsjail --mode e is execve, not execvp: it does not search PATH. Resolve
+	// the command to an absolute path here so a bare "python3" still works.
+	// Absolute and ./relative paths pass through exec.LookPath unchanged.
+	resolved, err := exec.LookPath(config.Cmd)
+	if err != nil {
+		return StartConfig{}, fmt.Errorf("cannot resolve sandboxed command %q: %w", config.Cmd, err)
+	}
+	config.Cmd = resolved
+
 	return StartConfig{
 		Cmd: cfg.NsjailPath,
 		// CWD is managed by --cwd inside nsjail; exec.Cmd CWD is irrelevant.
@@ -56,8 +75,17 @@ func buildNsjailArgs(config StartConfig, cfg SandboxConfig) []string {
 	// Use 'e' (execve), not 'o' (once/TCP) — we rely on stdio, not a network socket.
 	args = append(args, "--mode", "e")
 
-	// Suppress nsjail's own log output so it doesn't pollute worker stderr.
-	args = append(args, "--log", "/dev/null")
+	// Forward the parent environment to the jailed child. nsjail clears the
+	// child env by default; without this the worker loses PATH, AWS_* creds,
+	// etc. — behaving differently from a non-sandboxed worker. The nsjail
+	// process itself receives os.Environ()+config.Env from createCmd.
+	args = append(args, "--keep_env")
+
+	// Logging: by default run quiet so per-run INFO spam stays out of worker
+	// stderr, while fatal cmdline-parse / namespace-setup errors still surface.
+	if !cfg.Verbose {
+		args = append(args, "--quiet")
+	}
 
 	// Drop privileges: run worker as nobody unless overridden.
 	user := cfg.User
@@ -70,8 +98,16 @@ func buildNsjailArgs(config StartConfig, cfg SandboxConfig) []string {
 	args = append(args, "--chroot", "/")
 
 	// Preserve the worker's intended working directory inside the sandbox.
-	if config.Cwd != "" {
-		args = append(args, "--cwd", config.Cwd)
+	// Fall back to shimmy's own cwd so a sandboxed worker starts where a
+	// non-sandboxed one would, instead of nsjail's default "/".
+	cwd := config.Cwd
+	if cwd == "" {
+		if wd, err := os.Getwd(); err == nil {
+			cwd = wd
+		}
+	}
+	if cwd != "" {
+		args = append(args, "--cwd", cwd)
 	}
 
 	// Filesystem: read-only bind mounts.
@@ -97,11 +133,36 @@ func buildNsjailArgs(config StartConfig, cfg SandboxConfig) []string {
 		args = append(args, "--disable_clone_newnet")
 	}
 
-	// When running as root (e.g. inside a privileged container), skip user
-	// namespace creation — nested CLONE_NEWUSER is typically blocked by the
-	// container runtime. setuid/setgid via --user still drops privileges.
-	if os.Getuid() == 0 {
+	// Namespaces that constrained hosts (rootless Podman, locked-down Fargate)
+	// may reject. CLONE_NEWNS is kept unconditionally — it is what makes the
+	// bind-mount filesystem confinement work.
+	if cfg.DisableCloneNewpid {
+		args = append(args, "--disable_clone_newpid")
+	}
+	if cfg.DisableCloneNewipc {
+		args = append(args, "--disable_clone_newipc")
+	}
+	if cfg.DisableCloneNewuts {
+		args = append(args, "--disable_clone_newuts")
+	}
+	if cfg.DisableCloneNewcgroup {
+		args = append(args, "--disable_clone_newcgroup")
+	}
+
+	// User namespace. "auto" (default) drops it when shimmy runs as root
+	// (e.g. inside a privileged container) where nested CLONE_NEWUSER is
+	// typically blocked; setuid/setgid via --user still drops privileges.
+	// Rootless Podman maps the invoking user to uid 0 inside a userns and
+	// needs CLONE_NEWUSER — set "enabled" there.
+	switch cfg.CloneNewuser {
+	case "disabled":
 		args = append(args, "--disable_clone_newuser")
+	case "enabled":
+		// force-keep the user namespace; append nothing
+	default: // "" / "auto"
+		if os.Getuid() == 0 {
+			args = append(args, "--disable_clone_newuser")
+		}
 	}
 
 	// Resource limits.
@@ -119,9 +180,13 @@ func buildNsjailArgs(config StartConfig, cfg SandboxConfig) []string {
 		args = append(args, "--rlimit_nofile", strconv.Itoa(cfg.MaxFds))
 	}
 
-	// Seccomp: use nsjail's built-in default syscall policy.
-	if cfg.Seccomp {
-		args = append(args, "--seccomp_default_policy=1")
+	// Seccomp: an explicit kafel policy, either inline or from a file. nsjail
+	// has no "default policy" flag; without a policy the child still runs with
+	// NO_NEW_PRIVS, which nsjail sets by default.
+	if cfg.SeccompString != "" {
+		args = append(args, "--seccomp_string", cfg.SeccompString)
+	} else if cfg.SeccompPolicyFile != "" {
+		args = append(args, "--seccomp_policy", cfg.SeccompPolicyFile)
 	}
 
 	// Separator: everything after "--" is the command to execute.

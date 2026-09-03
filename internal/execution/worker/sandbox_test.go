@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -145,6 +146,158 @@ func TestApplySandbox_EnvPreserved(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, env, out.Env)
+}
+
+func TestApplySandbox_KeepEnv(t *testing.T) {
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{},
+	)
+	require.NoError(t, err)
+	assert.Contains(t, out.Args, "--keep_env")
+}
+
+func TestApplySandbox_ResolvesBareCommand(t *testing.T) {
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "sh"},
+		worker.SandboxConfig{},
+	)
+	require.NoError(t, err)
+
+	sepIdx := indexOf(out.Args, "--")
+	require.NotEqual(t, -1, sepIdx)
+	assert.True(t, filepath.IsAbs(out.Args[sepIdx+1]),
+		"bare command must be resolved to an absolute path, got %q", out.Args[sepIdx+1])
+}
+
+func TestApplySandbox_UnresolvableCommand_ReturnsError(t *testing.T) {
+	_, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "definitely-not-a-real-binary-xyz"},
+		worker.SandboxConfig{},
+	)
+	assert.Error(t, err)
+}
+
+func TestApplySandbox_CwdDefaultsToWorkingDir(t *testing.T) {
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{},
+	)
+	require.NoError(t, err)
+
+	cwdIdx := indexOf(out.Args, "--cwd")
+	require.NotEqual(t, -1, cwdIdx, "--cwd must default to shimmy's working directory")
+	wd, _ := os.Getwd()
+	assert.Equal(t, wd, out.Args[cwdIdx+1])
+}
+
+func TestApplySandbox_Quiet(t *testing.T) {
+	quiet, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{},
+	)
+	require.NoError(t, err)
+	assert.Contains(t, quiet.Args, "--quiet")
+
+	verbose, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{Verbose: true},
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, verbose.Args, "--quiet")
+}
+
+func TestApplySandbox_NamespaceToggles(t *testing.T) {
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{
+			DisableCloneNewpid:    true,
+			DisableCloneNewipc:    true,
+			DisableCloneNewuts:    true,
+			DisableCloneNewcgroup: true,
+		},
+	)
+	require.NoError(t, err)
+	assert.Contains(t, out.Args, "--disable_clone_newpid")
+	assert.Contains(t, out.Args, "--disable_clone_newipc")
+	assert.Contains(t, out.Args, "--disable_clone_newuts")
+	assert.Contains(t, out.Args, "--disable_clone_newcgroup")
+
+	def, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{},
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, def.Args, "--disable_clone_newpid")
+	assert.NotContains(t, def.Args, "--disable_clone_newipc")
+	assert.NotContains(t, def.Args, "--disable_clone_newuts")
+	assert.NotContains(t, def.Args, "--disable_clone_newcgroup")
+}
+
+func TestApplySandbox_CloneNewuser(t *testing.T) {
+	disabled, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{CloneNewuser: "disabled"},
+	)
+	require.NoError(t, err)
+	assert.Contains(t, disabled.Args, "--disable_clone_newuser")
+
+	enabled, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{CloneNewuser: "enabled"},
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, enabled.Args, "--disable_clone_newuser")
+}
+
+func TestApplySandbox_SeccompString(t *testing.T) {
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{SeccompString: "DEFAULT ALLOW\n"},
+	)
+	require.NoError(t, err)
+	assert.True(t, containsPair(out.Args, "--seccomp_string", "DEFAULT ALLOW\n"))
+	assert.NotContains(t, out.Args, "--seccomp_policy")
+}
+
+func TestApplySandbox_SeccompPolicyFile(t *testing.T) {
+	dir := t.TempDir()
+	policy := filepath.Join(dir, "policy.kafel")
+	require.NoError(t, os.WriteFile(policy, []byte("DEFAULT ALLOW\n"), 0644))
+
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{SeccompPolicyFile: policy},
+	)
+	require.NoError(t, err)
+	assert.True(t, containsPair(out.Args, "--seccomp_policy", policy))
+	assert.NotContains(t, out.Args, "--seccomp_string")
+}
+
+func TestApplySandbox_SeccompMissingPolicyFile_ReturnsError(t *testing.T) {
+	_, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{SeccompPolicyFile: "/no/such/policy.kafel"},
+	)
+	assert.Error(t, err)
+}
+
+func TestApplySandbox_SeccompMutuallyExclusive_ReturnsError(t *testing.T) {
+	_, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{SeccompString: "DEFAULT ALLOW\n", SeccompPolicyFile: "/tmp/x"},
+	)
+	assert.Error(t, err)
+}
+
+func TestApplySandbox_NoSeccompByDefault(t *testing.T) {
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{},
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, out.Args, "--seccomp_string")
+	assert.NotContains(t, out.Args, "--seccomp_policy")
 }
 
 func TestNewSandboxedWorkerFactory_MissingBinary(t *testing.T) {
@@ -330,6 +483,122 @@ func TestSandboxedWorker_StdioPassthrough(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, exit.Success(), "expected exit 0: %s", exit.String())
 	assert.Equal(t, msg, out.String())
+}
+
+// TestSandboxedWorker_SeccompString verifies that a kafel seccomp policy is
+// accepted by nsjail — a regression guard for the bogus --seccomp_default_policy=1
+// flag that made nsjail fail to parse its cmdline and break every request.
+func TestSandboxedWorker_SeccompString(t *testing.T) {
+	requireNsjail(t)
+
+	factory, err := worker.NewSandboxedWorkerFactory(worker.SandboxConfig{
+		NsjailPath:    "/usr/sbin/nsjail",
+		ReadOnlyBinds: []string{"/usr", "/bin", "/lib", "/lib64"},
+		SeccompString: "DEFAULT ALLOW\n",
+	})
+	require.NoError(t, err)
+
+	w, err := factory(context.Background(), worker.StartConfig{Cmd: "/bin/true"}, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, w.Start(context.Background()))
+
+	exit, err := w.Wait(context.Background())
+	require.NoError(t, err)
+	assert.True(t, exit.Success(), "nsjail should accept the kafel policy: %s", exit.String())
+}
+
+// TestSandboxedWorker_InheritsEnvironment verifies that the parent environment
+// reaches the jailed child (via --keep_env), so PATH / AWS_* creds are not lost.
+func TestSandboxedWorker_InheritsEnvironment(t *testing.T) {
+	requireNsjail(t)
+
+	t.Setenv("SHIMMY_TEST_VAR", "sandbox-env-ok")
+
+	factory, err := worker.NewSandboxedWorkerFactory(worker.SandboxConfig{
+		NsjailPath:    "/usr/sbin/nsjail",
+		ReadOnlyBinds: []string{"/usr", "/bin", "/lib", "/lib64"},
+	})
+	require.NoError(t, err)
+
+	w, err := factory(context.Background(), worker.StartConfig{
+		Cmd:  "/bin/sh",
+		Args: []string{"-c", `printf %s "$SHIMMY_TEST_VAR"`},
+	}, zap.NewNop())
+	require.NoError(t, err)
+
+	stdout, err := w.ReadPipe()
+	require.NoError(t, err)
+
+	require.NoError(t, w.Start(context.Background()))
+
+	var out bytes.Buffer
+	io.Copy(&out, stdout) //nolint:errcheck
+
+	exit, err := w.Wait(context.Background())
+	require.NoError(t, err)
+	assert.True(t, exit.Success(), "expected exit 0: %s", exit.String())
+	assert.Equal(t, "sandbox-env-ok", out.String())
+}
+
+// TestSandboxedWorker_ResolvesBareCommand verifies that a PATH-relative command
+// (not an absolute path) is resolved before nsjail's execve.
+func TestSandboxedWorker_ResolvesBareCommand(t *testing.T) {
+	requireNsjail(t)
+
+	factory, err := worker.NewSandboxedWorkerFactory(worker.SandboxConfig{
+		NsjailPath:    "/usr/sbin/nsjail",
+		ReadOnlyBinds: []string{"/usr", "/bin", "/lib", "/lib64"},
+	})
+	require.NoError(t, err)
+
+	w, err := factory(context.Background(), worker.StartConfig{Cmd: "true"}, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, w.Start(context.Background()))
+
+	exit, err := w.Wait(context.Background())
+	require.NoError(t, err)
+	assert.True(t, exit.Success(), "bare 'true' should resolve and exit 0: %s", exit.String())
+}
+
+// TestSandboxedWorker_DefaultCwd verifies that, with no explicit working
+// directory, the worker starts in shimmy's own cwd rather than nsjail's "/".
+func TestSandboxedWorker_DefaultCwd(t *testing.T) {
+	requireNsjail(t)
+
+	// A world-traversable directory under /tmp so uid 65534 can enter it.
+	dir, err := os.MkdirTemp("", "sandbox-cwd-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	require.NoError(t, os.Chmod(dir, 0755))
+	dir, err = filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+
+	t.Chdir(dir)
+
+	factory, err := worker.NewSandboxedWorkerFactory(worker.SandboxConfig{
+		NsjailPath:    "/usr/sbin/nsjail",
+		ReadOnlyBinds: []string{"/usr", "/bin", "/lib", "/lib64", dir},
+	})
+	require.NoError(t, err)
+
+	w, err := factory(context.Background(), worker.StartConfig{
+		Cmd:  "/bin/pwd",
+		Args: []string{"-P"},
+	}, zap.NewNop())
+	require.NoError(t, err)
+
+	stdout, err := w.ReadPipe()
+	require.NoError(t, err)
+
+	require.NoError(t, w.Start(context.Background()))
+
+	var out bytes.Buffer
+	io.Copy(&out, stdout) //nolint:errcheck
+
+	exit, err := w.Wait(context.Background())
+	require.NoError(t, err)
+	assert.True(t, exit.Success(), "expected exit 0: %s", exit.String())
+	assert.Equal(t, dir+"\n", out.String())
 }
 
 // helpers

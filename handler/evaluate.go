@@ -53,6 +53,7 @@ type MuEdHandlerParams struct {
 
 	Handler             runtime.Handler
 	Runtime             runtime.Runtime
+	Registry            *runtime.MuEdRegistry
 	Config              config.Config
 	Log                 *zap.Logger
 	ProgressFactory     progress.Factory
@@ -68,6 +69,7 @@ type MuEdHandlerParams struct {
 type MuEdHandler struct {
 	handler          runtime.Handler
 	runtime          runtime.Runtime
+	registry         *runtime.MuEdRegistry
 	config           config.Config
 	log              *zap.Logger
 	progressFactory  progress.Factory
@@ -79,6 +81,7 @@ func NewMuEdHandler(params MuEdHandlerParams) *MuEdHandler {
 	return &MuEdHandler{
 		handler:          params.Handler,
 		runtime:          params.Runtime,
+		registry:         params.Registry,
 		config:           params.Config,
 		log:              params.Log,
 		progressFactory:  params.ProgressFactory,
@@ -87,36 +90,56 @@ func NewMuEdHandler(params MuEdHandlerParams) *MuEdHandler {
 	}
 }
 
+// muEdRegistry returns the handler's version registry, falling back to the
+// process-wide default when none was injected (e.g. in unit tests).
+func (h *MuEdHandler) muEdRegistry() *runtime.MuEdRegistry {
+	if h.registry != nil {
+		return h.registry
+	}
+	return runtime.DefaultMuEdRegistry()
+}
+
+// streamingEnabled reports whether this deployment can and should stream
+// SSE progress: a streaming-capable environment with streaming turned on
+// in config. It gates both the runtime decision to stream a response and
+// the capability shimmy advertises on its health endpoints.
+func (h *MuEdHandler) streamingEnabled() bool {
+	return h.streamingCapable && h.config.Progress.Stream.Enabled
+}
+
 func writeJSONError(w http.ResponseWriter, msg string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": msg}}) //nolint:errcheck
 }
 
-// checkMuEdVersion validates the X-Api-Version request header.
-// Returns (resolvedVersion, true) on success, or writes a 406 and returns ("", false).
-func (h *MuEdHandler) checkMuEdVersion(w http.ResponseWriter, r *http.Request) (string, bool) {
+// checkMuEdVersion validates the X-Api-Version request header and resolves it to
+// a concrete version adapter. Returns (resolvedVersion, adapter, true) on
+// success, or writes a 406 and returns ("", nil, false).
+func (h *MuEdHandler) checkMuEdVersion(w http.ResponseWriter, r *http.Request) (string, runtime.MuEdAdapter, bool) {
+	reg := h.muEdRegistry()
 	requested := r.Header.Get(muEdVersionHeader)
-	if requested != "" && !runtime.MuEdIsVersionSupported(requested) {
+	if requested != "" && !reg.Supports(requested) {
 		body, _ := json.Marshal(map[string]any{
 			"title": "API version not supported",
 			"message": fmt.Sprintf(
 				"The requested API version '%s' is not supported. Supported versions are: %v.",
-				requested, runtime.SupportedMuEdVersions,
+				requested, reg.Versions(),
 			),
 			"code": "VERSION_NOT_SUPPORTED",
 			"details": map[string]any{
 				"requestedVersion":  requested,
-				"supportedVersions": runtime.SupportedMuEdVersions,
+				"supportedVersions": reg.Versions(),
 			},
 		})
-		w.Header().Set(muEdVersionHeader, runtime.MuEdResolveVersion(requested))
+		w.Header().Set(muEdVersionHeader, reg.Resolve(requested))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotAcceptable)
 		w.Write(body) //nolint:errcheck
-		return "", false
+		return "", nil, false
 	}
-	return runtime.MuEdResolveVersion(requested), true
+	version := reg.Resolve(requested)
+	return version, reg.Adapter(version), true
 }
 
 // writeMuEdError writes a structured muEd JSON error response with X-Api-Version header.
@@ -151,7 +174,7 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version, ok := h.checkMuEdVersion(w, r)
+	version, adapter, ok := h.checkMuEdVersion(w, r)
 	if !ok {
 		return
 	}
@@ -167,20 +190,7 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var muEdReq runtime.MuEdEvaluateRequest
-	if err := json.Unmarshal(body, &muEdReq); err != nil {
-		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", "invalid request body", nil)
-		return
-	}
-
-	isPreview := muEdReq.PreSubmissionFeedback != nil && muEdReq.PreSubmissionFeedback.Enabled
-
-	var legacyBody map[string]any
-	if isPreview {
-		legacyBody, err = runtime.MuEdBuildLegacyPreviewRequest(muEdReq)
-	} else {
-		legacyBody, err = runtime.MuEdBuildLegacyEvaluateRequest(muEdReq)
-	}
+	legacyBody, command, err := adapter.DecodeEvaluate(body)
 	if err != nil {
 		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", err.Error(), nil)
 		return
@@ -190,11 +200,6 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "failed to build request", nil)
 		return
-	}
-
-	command := runtime.CommandEvaluate
-	if isPreview {
-		command = runtime.CommandPreview
 	}
 
 	header := http.Header{}
@@ -207,12 +212,17 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		Header: header,
 	}
 
+	// The adapter's DecodeEvaluate deliberately does not surface transport
+	// concerns like callbackUrl, so pull it from the raw body here. A parse
+	// failure is impossible in practice — DecodeEvaluate already parsed the
+	// same bytes — so a miss just means no out-of-band progress delivery.
 	var callbackURL string
-	if muEdReq.CallbackUrl != nil {
+	var muEdReq runtime.MuEdEvaluateRequest
+	if json.Unmarshal(body, &muEdReq) == nil && muEdReq.CallbackUrl != nil {
 		callbackURL = *muEdReq.CallbackUrl
 	}
 
-	streaming := h.streamingCapable && h.config.Progress.Stream.Enabled && acceptsEventStream(r)
+	streaming := h.streamingEnabled() && acceptsEventStream(r)
 	if streaming {
 		if _, ok := w.(http.Flusher); !ok {
 			h.log.Warn("response writer is not a flusher; serving buffered response")
@@ -223,20 +233,22 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if streaming {
-		h.serveEvaluateStream(ctx, w, req, command, isPreview, version, callbackURL, requestID)
+		h.serveEvaluateStream(ctx, w, req, adapter, command, version, callbackURL, requestID)
 		return
 	}
 
-	reporter, err := h.progressFactory.NewReporter(callbackURL, requestID)
-	if err != nil {
-		h.log.Warn("invalid callbackUrl, disabling progress reporting", zap.Error(err))
-	} else if reporter != nil {
-		ctx = progress.ContextWithReporter(ctx, reporter)
+	if h.progressFactory != nil {
+		reporter, rerr := h.progressFactory.NewReporter(callbackURL, requestID)
+		if rerr != nil {
+			h.log.Warn("invalid callbackUrl, disabling progress reporting", zap.Error(rerr))
+		} else if reporter != nil {
+			ctx = progress.ContextWithReporter(ctx, reporter)
+		}
 	}
 
 	resp := h.handler.Handle(ctx, req)
 
-	feedback, termErr := h.produceFeedback(resp, isPreview)
+	feedback, termErr := h.produceFeedback(resp, adapter, command)
 	if termErr != nil {
 		progress.Emit(ctx, progress.Event{
 			Stage:     progress.StageFailed,
@@ -335,10 +347,10 @@ func (e *terminalError) progressErrorInfo(fallbackTitle string) *progress.ErrorI
 	}
 }
 
-// produceFeedback turns a runtime response into muEd feedback, or a
-// terminalError describing why it couldn't. It is pure: no writes, no
-// progress events.
-func (h *MuEdHandler) produceFeedback(resp runtime.Response, isPreview bool) ([]map[string]any, *terminalError) {
+// produceFeedback turns a runtime response into muEd feedback via the
+// resolved version adapter, or a terminalError describing why it couldn't.
+// It is pure: no writes, no progress events.
+func (h *MuEdHandler) produceFeedback(resp runtime.Response, adapter runtime.MuEdAdapter, command runtime.Command) ([]map[string]any, *terminalError) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, &terminalError{
 			passthrough: true,
@@ -374,10 +386,18 @@ func (h *MuEdHandler) produceFeedback(resp runtime.Response, isPreview bool) ([]
 		}
 	}
 
-	if isPreview {
-		return runtime.MuEdToPreviewFeedback(result), nil
+	feedback, err := adapter.EncodeEvaluateFeedback(command, result)
+	if err != nil {
+		return nil, &terminalError{
+			status:      http.StatusInternalServerError,
+			muEdCode:    "INTERNAL_ERROR",
+			muEdTitle:   "Internal server error",
+			muEdMessage: "failed to build feedback",
+			userMessage: "We couldn't evaluate your answer. Please try again.",
+			rawError:    fmt.Sprintf("failed to build feedback: %v", err),
+		}
 	}
-	return runtime.MuEdToEvaluateFeedback(result), nil
+	return feedback, nil
 }
 
 // serveEvaluateStream handles a POST /evaluate request that opted in to
@@ -390,21 +410,21 @@ func (h *MuEdHandler) serveEvaluateStream(
 	ctx context.Context,
 	w http.ResponseWriter,
 	req runtime.Request,
+	adapter runtime.MuEdAdapter,
 	command runtime.Command,
-	isPreview bool,
 	version string,
 	callbackURL string,
 	requestID string,
 ) {
 	cmdLabel := "evaluate"
-	if isPreview {
+	if command == runtime.CommandPreview {
 		cmdLabel = "preview"
 	}
 
 	h.streamProgress(ctx, w, cmdLabel, string(command), "Feedback is ready.", version, callbackURL, requestID,
 		func(ctx context.Context) (map[string]any, *terminalError) {
 			resp := h.handler.Handle(ctx, req)
-			feedback, termErr := h.produceFeedback(resp, isPreview)
+			feedback, termErr := h.produceFeedback(resp, adapter, command)
 			if termErr != nil {
 				return nil, termErr
 			}
@@ -443,7 +463,7 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version, ok := h.checkMuEdVersion(w, r)
+	version, adapter, ok := h.checkMuEdVersion(w, r)
 	if !ok {
 		return
 	}
@@ -468,7 +488,7 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := runtime.MuEdToHealthResponse(legacyResult, h.streamingCapable && h.config.Progress.Stream.Enabled)
+	result := adapter.EncodeHealth(legacyResult, h.streamingEnabled())
 
 	statusCode := http.StatusOK
 	if s, ok := result["status"].(string); ok && s == "UNAVAILABLE" {

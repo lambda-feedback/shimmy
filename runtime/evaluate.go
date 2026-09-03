@@ -1,10 +1,6 @@
 package runtime
 
-import (
-	"fmt"
-
-	"github.com/lambda-feedback/shimmy/internal/progress"
-)
+import "fmt"
 
 type MuEdSubmissionType string
 
@@ -67,7 +63,7 @@ func MuEdToHealthResponse(result map[string]any, streamingEnabled bool) map[stri
 			"supportsFormativeFeedback":     true,
 			"supportsSummativeFeedback":     false,
 			"supportsDataPolicy":            "NOT_SUPPORTED",
-			"supportedAPIVersions":          SupportedMuEdVersions,
+			"supportedAPIVersions":          SupportedMuEdVersions(),
 			"supportsStreaming":             streamingEnabled,
 			"supportedProgressStages":       evaluateProgressStages,
 		},
@@ -76,13 +72,15 @@ func MuEdToHealthResponse(result map[string]any, streamingEnabled bool) map[stri
 
 // evaluateProgressStages is the set of SseProgressStep.stage values an
 // /evaluate SSE stream can emit, advertised via
-// capabilities.supportedProgressStages.
+// capabilities.supportedProgressStages. The literals mirror the
+// progress.Stage* constants; they are inlined here to keep the runtime
+// package free of a dependency on internal/progress.
 var evaluateProgressStages = []string{
-	string(progress.StagePreparing),
-	string(progress.StageStarting),
-	string(progress.StageEvaluating),
-	string(progress.StageCompleted),
-	string(progress.StageFailed),
+	"preparing",
+	"starting",
+	"evaluating",
+	"completed",
+	"failed",
 }
 
 func muEdContentKey(t MuEdSubmissionType) string {

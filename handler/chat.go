@@ -23,7 +23,7 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version, ok := h.checkMuEdVersion(w, r)
+	version, adapter, ok := h.checkMuEdVersion(w, r)
 	if !ok {
 		return
 	}
@@ -39,24 +39,23 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var chatReq runtime.MuEdChatRequest
-	if err := json.Unmarshal(body, &chatReq); err != nil {
-		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", "invalid request body", nil)
-		return
-	}
-
-	reqData, err := runtime.MuEdBuildChatRequest(chatReq)
+	reqData, err := adapter.DecodeChat(body)
 	if err != nil {
 		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", err.Error(), nil)
 		return
 	}
 
+	// The adapter's DecodeChat deliberately does not surface transport
+	// concerns like callbackUrl, so pull it from the raw body here. A parse
+	// failure is impossible in practice — DecodeChat already parsed the
+	// same bytes — so a miss just means no out-of-band progress delivery.
 	var callbackURL string
-	if chatReq.CallbackUrl != nil {
+	var chatReq runtime.MuEdChatRequest
+	if json.Unmarshal(body, &chatReq) == nil && chatReq.CallbackUrl != nil {
 		callbackURL = *chatReq.CallbackUrl
 	}
 
-	streaming := h.streamingCapable && h.config.Progress.Stream.Enabled && acceptsEventStream(r)
+	streaming := h.streamingEnabled() && acceptsEventStream(r)
 	if streaming {
 		if _, ok := w.(http.Flusher); !ok {
 			h.log.Warn("response writer is not a flusher; serving buffered response")
@@ -67,11 +66,11 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if streaming {
-		h.serveChatStream(ctx, w, reqData, version, callbackURL, requestID)
+		h.serveChatStream(ctx, w, reqData, adapter, version, callbackURL, requestID)
 		return
 	}
 
-	if callbackURL != "" {
+	if callbackURL != "" && h.progressFactory != nil {
 		reporter, rerr := h.progressFactory.NewReporter(callbackURL, requestID)
 		if rerr != nil {
 			h.log.Warn("invalid callbackUrl, disabling progress reporting", zap.Error(rerr))
@@ -81,7 +80,7 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.runtime.Chat(ctx, runtime.ChatRequest{Data: reqData})
-	output, metadata, termErr := h.produceChatOutput(resp, err)
+	chatResp, termErr := h.produceChatOutput(resp, err, adapter)
 	if termErr != nil {
 		progress.Emit(ctx, progress.Event{
 			Stage:     progress.StageFailed,
@@ -94,16 +93,11 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chatResp := map[string]any{"output": output}
-	if metadata != nil {
-		chatResp["metadata"] = metadata
-	}
-
 	progress.Emit(ctx, progress.Event{
 		Stage:   progress.StageCompleted,
 		Command: string(runtime.CommandChat),
 		Message: "Response is ready.",
-		Data:    map[string]any{"output": output, "metadata": metadata},
+		Data:    chatResp,
 	})
 
 	w.Header().Set("Content-Type", "application/json")
@@ -119,6 +113,7 @@ func (h *MuEdHandler) serveChatStream(
 	ctx context.Context,
 	w http.ResponseWriter,
 	reqData map[string]any,
+	adapter runtime.MuEdAdapter,
 	version string,
 	callbackURL string,
 	requestID string,
@@ -126,25 +121,21 @@ func (h *MuEdHandler) serveChatStream(
 	h.streamProgress(ctx, w, "chat", string(runtime.CommandChat), "Response is ready.", version, callbackURL, requestID,
 		func(ctx context.Context) (map[string]any, *terminalError) {
 			resp, err := h.runtime.Chat(ctx, runtime.ChatRequest{Data: reqData})
-			output, metadata, termErr := h.produceChatOutput(resp, err)
+			chatResp, termErr := h.produceChatOutput(resp, err, adapter)
 			if termErr != nil {
 				return nil, termErr
 			}
-			data := map[string]any{"output": output}
-			if metadata != nil {
-				data["metadata"] = metadata
-			}
-			return data, nil
+			return chatResp, nil
 		})
 }
 
-// produceChatOutput turns a runtime chat response into the µEd output
-// object (+ optional metadata), or a terminalError describing why it
-// couldn't. It is pure: no writes, no progress events. Unlike
-// produceFeedback there is no worker-non-200 passthrough — runtime.Chat
-// returns (response, error), not an HTTP status — so every failure is a
-// 500-class terminalError.
-func (h *MuEdHandler) produceChatOutput(resp runtime.ChatResponse, chatErr error) (output, metadata map[string]any, _ *terminalError) {
+// produceChatOutput turns a runtime chat response into the µEd chat
+// response object via the resolved version adapter, or a terminalError
+// describing why it couldn't. It is pure: no writes, no progress events.
+// Unlike produceFeedback there is no worker-non-200 passthrough —
+// runtime.Chat returns (response, error), not an HTTP status — so every
+// failure is a 500-class terminalError.
+func (h *MuEdHandler) produceChatOutput(resp runtime.ChatResponse, chatErr error, adapter runtime.MuEdAdapter) (map[string]any, *terminalError) {
 	newErr := func(muEdMessage, rawError string) *terminalError {
 		return &terminalError{
 			status:      http.StatusInternalServerError,
@@ -157,22 +148,19 @@ func (h *MuEdHandler) produceChatOutput(resp runtime.ChatResponse, chatErr error
 	}
 
 	if chatErr != nil {
-		return nil, nil, newErr("chat failed", chatErr.Error())
+		return nil, newErr("chat failed", chatErr.Error())
 	}
 
 	resultMap, ok := resp.Data["result"].(map[string]any)
 	if !ok {
-		return nil, nil, newErr("invalid response from chat function", "invalid response from chat function")
+		return nil, newErr("invalid response from chat function", "invalid response from chat function")
 	}
 
-	chatResp, err := runtime.MuEdToChatResponse(resultMap)
+	chatResp, err := adapter.EncodeChat(resultMap)
 	if err != nil {
-		return nil, nil, newErr(err.Error(), fmt.Sprintf("invalid chat response: %v", err))
+		return nil, newErr(err.Error(), fmt.Sprintf("invalid chat response: %v", err))
 	}
-
-	output, _ = chatResp["output"].(map[string]any)
-	metadata, _ = chatResp["metadata"].(map[string]any)
-	return output, metadata, nil
+	return chatResp, nil
 }
 
 // ServeChatHealth handles GET /chat/health.
@@ -183,7 +171,7 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version, ok := h.checkMuEdVersion(w, r)
+	version, adapter, ok := h.checkMuEdVersion(w, r)
 	if !ok {
 		return
 	}
@@ -205,7 +193,7 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	healthResp := runtime.MuEdToChatHealthResponse(resultMap, h.streamingCapable && h.config.Progress.Stream.Enabled)
+	healthResp := adapter.EncodeChatHealth(resultMap, h.streamingEnabled())
 
 	statusCode := http.StatusOK
 	if status, ok := healthResp["status"].(string); ok && status == string(runtime.MuEdChatHealthStatusUnavailable) {

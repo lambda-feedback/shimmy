@@ -394,9 +394,9 @@ func TestServeEvaluate_SSE_Heartbeat(t *testing.T) {
 // buffer the stream), NormalizePath, and the streaming handler with a real
 // flushable ResponseWriter.
 func TestServeEvaluate_SSE_ThroughOpenAPIMiddleware(t *testing.T) {
-	spec, err := server.LoadOpenAPISpec()
+	specs, err := server.LoadOpenAPISpecs()
 	require.NoError(t, err)
-	mw, err := server.OpenAPIMiddleware(spec, zap.NewNop())
+	mw, err := server.OpenAPIMiddleware(specs, nil, zap.NewNop())
 	require.NoError(t, err)
 
 	mockHandler := new(MockHandler)
