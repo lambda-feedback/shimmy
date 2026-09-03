@@ -3,6 +3,8 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 // ChatRequest is the dispatcher-level request for the chat command.
@@ -110,7 +112,12 @@ func MuEdToChatResponse(result map[string]any) (map[string]any, error) {
 // this passes the worker's capabilities through largely as-is — it only
 // fills in the spec's required keys/defaults and normalises nil slices to
 // empty ones so they serialise as [] not null.
-func MuEdToChatHealthResponse(result map[string]any) map[string]any {
+//
+// SSE progress streaming is the exception: it is a shimmy-layer capability,
+// not the worker's, so supportsStreaming/supportedProgressStages are set
+// from streamingEnabled (shimmy's streaming build + config), overriding
+// anything the worker reported.
+func MuEdToChatHealthResponse(result map[string]any, streamingEnabled bool) map[string]any {
 	status, _ := result["status"].(string)
 	if status == "" {
 		status = string(MuEdChatHealthStatusOK)
@@ -131,6 +138,8 @@ func MuEdToChatHealthResponse(result map[string]any) map[string]any {
 			capabilities[key] = []string{}
 		}
 	}
+	capabilities["supportsStreaming"] = streamingEnabled
+	capabilities["supportedProgressStages"] = chatProgressStages
 
 	resp := map[string]any{
 		"status":       status,
@@ -143,4 +152,14 @@ func MuEdToChatHealthResponse(result map[string]any) map[string]any {
 		resp["version"] = version
 	}
 	return resp
+}
+
+// chatProgressStages is the set of SseProgressStep.stage values a /chat
+// SSE stream can emit, advertised via capabilities.supportedProgressStages.
+var chatProgressStages = []string{
+	string(progress.StagePreparing),
+	string(progress.StageStarting),
+	string(progress.StageThinking),
+	string(progress.StageCompleted),
+	string(progress.StageFailed),
 }
