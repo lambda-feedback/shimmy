@@ -40,6 +40,7 @@ func (markerAdapter) EncodeChat(map[string]any) (map[string]any, error) {
 func (markerAdapter) EncodeChatHealth(map[string]any, bool) map[string]any {
 	return map[string]any{"marker": "chat-health-9.9.9"}
 }
+func (markerAdapter) SupportsStreaming() bool { return false }
 
 func newMuEdHandlerWithRegistry(h runtime.Handler, r runtime.Runtime, reg *runtime.MuEdRegistry) *MuEdHandler {
 	return &MuEdHandler{

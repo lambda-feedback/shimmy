@@ -59,3 +59,7 @@ func (muEdV010) EncodeChat(result map[string]any) (map[string]any, error) {
 func (muEdV010) EncodeChatHealth(result map[string]any, streamingEnabled bool) map[string]any {
 	return MuEdToChatHealthResponse(result, streamingEnabled)
 }
+
+// SupportsStreaming is false: canonical µEd 0.1.0 has no text/event-stream
+// response surface. shimmy's SSE progress streaming is offered from 0.1.1-dev on.
+func (muEdV010) SupportsStreaming() bool { return false }

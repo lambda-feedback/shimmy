@@ -636,7 +636,7 @@ func TestMuEdServeEvaluate_UnsupportedVersionHeader(t *testing.T) {
 	raw, _ := io.ReadAll(res.Body)
 
 	assert.Equal(t, http.StatusNotAcceptable, res.StatusCode)
-	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+	assert.Equal(t, "0.1.1-dev", res.Header.Get("X-Api-Version"), "406 stamps the latest supported version")
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(raw, &body))
@@ -686,7 +686,7 @@ func TestMuEdServeHealth_UnsupportedVersionHeader(t *testing.T) {
 	raw, _ := io.ReadAll(res.Body)
 
 	assert.Equal(t, http.StatusNotAcceptable, res.StatusCode)
-	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+	assert.Equal(t, "0.1.1-dev", res.Header.Get("X-Api-Version"), "406 stamps the latest supported version")
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(raw, &body))

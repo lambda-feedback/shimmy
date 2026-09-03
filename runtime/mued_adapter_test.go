@@ -32,6 +32,7 @@ func (a fakeAdapter) EncodeChat(map[string]any) (map[string]any, error) {
 func (a fakeAdapter) EncodeChatHealth(map[string]any, bool) map[string]any {
 	return map[string]any{"from": a.version}
 }
+func (a fakeAdapter) SupportsStreaming() bool { return false }
 
 func TestMuEdRegistry_OrderAndResolution(t *testing.T) {
 	reg := runtime.NewMuEdRegistry()
@@ -77,18 +78,28 @@ func TestMuEdRegistry_ReregisterKeepsPosition(t *testing.T) {
 	assert.Equal(t, []string{"0.1.0", "0.2.0"}, reg.Versions())
 }
 
-func TestDefaultMuEdRegistry_HasV010(t *testing.T) {
+func TestDefaultMuEdRegistry_RegisteredVersions(t *testing.T) {
 	reg := runtime.DefaultMuEdRegistry()
 
-	assert.Equal(t, []string{"0.1.0"}, reg.Versions())
-	assert.Equal(t, []string{"0.1.0"}, runtime.SupportedMuEdVersions())
+	assert.Equal(t, []string{"0.1.0", "0.1.1-dev"}, reg.Versions())
+	assert.Equal(t, []string{"0.1.0", "0.1.1-dev"}, runtime.SupportedMuEdVersions())
 	assert.True(t, runtime.MuEdIsVersionSupported("0.1.0"))
+	assert.True(t, runtime.MuEdIsVersionSupported("0.1.1-dev"))
 	assert.False(t, runtime.MuEdIsVersionSupported("99.0.0"))
 
-	assert.Equal(t, "0.1.0", runtime.MuEdResolveVersion(""))
+	assert.Equal(t, "0.1.0", reg.Default(), "0.1.0 stays the pinned default")
+	assert.Equal(t, "0.1.1-dev", reg.Latest())
+
+	assert.Equal(t, "0.1.0", runtime.MuEdResolveVersion(""), "header-less clients stay on 0.1.0")
 	assert.Equal(t, "0.1.0", runtime.MuEdResolveVersion("0.1.0"))
-	assert.Equal(t, "0.1.0", runtime.MuEdResolveVersion("99.0.0"))
+	assert.Equal(t, "0.1.1-dev", runtime.MuEdResolveVersion("0.1.1-dev"))
+	assert.Equal(t, "0.1.1-dev", runtime.MuEdResolveVersion("99.0.0"), "unsupported resolves to latest")
 
 	require.NotNil(t, reg.Adapter("0.1.0"))
 	assert.Equal(t, "0.1.0", reg.Adapter("0.1.0").Version())
+	require.NotNil(t, reg.Adapter("0.1.1-dev"))
+	assert.Equal(t, "0.1.1-dev", reg.Adapter("0.1.1-dev").Version())
+
+	assert.False(t, reg.Adapter("0.1.0").SupportsStreaming())
+	assert.True(t, reg.Adapter("0.1.1-dev").SupportsStreaming())
 }

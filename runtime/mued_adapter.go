@@ -37,6 +37,13 @@ type MuEdAdapter interface {
 	// capability for this deployment, overlaid on the worker's reported
 	// capabilities.
 	EncodeChatHealth(result map[string]any, streamingEnabled bool) map[string]any
+
+	// SupportsStreaming reports whether this µEd version's contract defines the
+	// opt-in SSE progress-streaming response surface (the text/event-stream
+	// media type on /evaluate and /chat). Handlers only stream when this is
+	// true, so a client negotiating a version without that surface always gets
+	// the buffered JSON body.
+	SupportsStreaming() bool
 }
 
 // MuEdRegistry holds the µEd version adapters known to the process, in

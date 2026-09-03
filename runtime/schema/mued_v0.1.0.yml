@@ -335,23 +335,7 @@ paths:
                     version: 1
       responses:
         '200':
-          description: |
-            Successfully generated feedback.
-
-            ### Streaming variant (opt-in)
-
-            If the request sends `Accept: text/event-stream` (standalone/serve
-            mode only; ignored under AWS Lambda), the response is a Server-Sent
-            Events progress stream instead of a single JSON body. The HTTP
-            status stays `200` for the whole stream, including failures. It is:
-            zero or more progress frames whose SSE `event:` is the stage name
-            and `data:` is an `SseProgressStep`; optional `:`-prefixed
-            keep-alive comment lines; and exactly one terminal frame —
-            `event: completed` with `data:` an `SseEvaluateTerminalFrame` (the
-            `200` body under `feedback`, plus a `steps` replay), or
-            `event: failed` with `data:` an `SseEvaluateTerminalFrame` whose
-            `error` is an `ErrorResponse`. `X-Request-Id` / `X-Api-Version` are
-            sent once as response headers when the stream opens.
+          description: Successfully generated feedback.
           headers:
             X-Request-Id:
               description: Request id for tracing this request across services.
@@ -391,9 +375,6 @@ paths:
                     - feedbackId: fb-2
                       title: Overall structure
                       message: The overall structure of your answer is clear and easy to follow.
-            text/event-stream:
-              schema:
-                $ref: '#/components/schemas/SseEvaluateTerminalFrame'
         '202':
           $ref: '#/components/responses/202-Accepted'
         '400':
@@ -602,23 +583,7 @@ paths:
                       temperature: 0.5
       responses:
         '200':
-          description: |
-            Successful chat response.
-
-            ### Streaming variant (opt-in)
-
-            If the request sends `Accept: text/event-stream` (standalone/serve
-            mode only; ignored under AWS Lambda), the response is a Server-Sent
-            Events progress stream instead of a single JSON body. The HTTP
-            status stays `200` for the whole stream, including failures. It is:
-            zero or more progress frames whose SSE `event:` is the stage name
-            and `data:` is an `SseProgressStep`; optional `:`-prefixed
-            keep-alive comment lines; and exactly one terminal frame —
-            `event: completed` with `data:` an `SseChatTerminalFrame` (the
-            `200` body as `output` / `metadata`, plus a `steps` replay), or
-            `event: failed` with `data:` an `SseChatTerminalFrame` whose
-            `error` is an `ErrorResponse`. `X-Request-Id` / `X-Api-Version` are
-            sent once as response headers when the stream opens.
+          description: Successful chat response.
           headers:
             X-Request-Id:
               description: Request id for tracing this request across services.
@@ -673,9 +638,6 @@ paths:
                         model: gpt-5.2
                         temperature: 0.5
                         outputTokens: 143
-            text/event-stream:
-              schema:
-                $ref: '#/components/schemas/SseChatTerminalFrame'
         '400':
           $ref: '#/components/responses/400-BadRequest-2'
         '403':
@@ -1573,21 +1535,6 @@ components:
         supportsSummativeFeedback:
           type: boolean
           description: Indicates whether the service supports feedback with points / grading signals.
-        supportsStreaming:
-          type: boolean
-          description: |
-            Whether /evaluate supports opt-in SSE progress streaming via
-            `Accept: text/event-stream`. Distinct from
-            `configuration.llm.stream`.
-        supportedProgressStages:
-          type:
-            - array
-            - 'null'
-          description: |
-            Optional list of `SseProgressStep.stage` values an /evaluate SSE
-            stream may emit. Informative; clients must tolerate unlisted values.
-          items:
-            type: string
         supportsDataPolicy:
           $ref: '#/components/schemas/DataPolicySupport'
         supportedArtefactProfiles:
@@ -1749,19 +1696,7 @@ components:
           description: Indicates whether the service supports adapting to user preferences.
         supportsStreaming:
           type: boolean
-          description: |
-            Whether /chat supports opt-in SSE progress streaming via
-            `Accept: text/event-stream`. Distinct from
-            `configuration.llm.stream`.
-        supportedProgressStages:
-          type:
-            - array
-            - 'null'
-          description: |
-            Optional list of `SseProgressStep.stage` values a /chat SSE
-            stream may emit. Informative; clients must tolerate unlisted values.
-          items:
-            type: string
+          description: Indicates whether the service supports streaming responses.
         supportsDataPolicy:
           $ref: '#/components/schemas/DataPolicySupport'
         supportedLanguages:
@@ -1807,136 +1742,6 @@ components:
           description: Optional version of the chat service implementation.
         capabilities:
           $ref: '#/components/schemas/ChatCapabilities'
-    SseProgressStep:
-      type: object
-      description: |
-        A single progress step emitted while an operation runs. Carried as
-        the SSE `data:` payload of an intermediate progress frame (the SSE
-        `event:` field carries the stage name), and replayed in the
-        terminal frame's `steps` array.
-      additionalProperties: true
-      required:
-        - stage
-        - timestamp
-      properties:
-        stage:
-          type: string
-          description: |
-            Lifecycle stage this step reports. Informative, not a fixed
-            enum: implementations may add stages and clients must tolerate
-            unrecognised values. Common values: "preparing", "starting",
-            "evaluating" (evaluate), "thinking" (chat), and the terminal
-            "completed" / "failed".
-        message:
-          type:
-            - string
-            - 'null'
-          description: Short, learner/teacher-facing description of the step.
-        data:
-          type: object
-          additionalProperties: true
-          description: |
-            Free-form payload attached by a worker-authored sub-step
-            (shimmy extension; the canonical spec relies on
-            additionalProperties for this).
-        timestamp:
-          type: string
-          format: date-time
-    SseTerminalSteps:
-      type: object
-      description: |
-        Shared fragment of the terminal SSE frame: the ordered replay of
-        every progress step emitted during the stream, so a client that
-        connected late or dropped frames still receives the full trace.
-      required:
-        - steps
-      properties:
-        steps:
-          type: array
-          description: Ordered list of every SseProgressStep emitted during the stream.
-          items:
-            $ref: '#/components/schemas/SseProgressStep'
-    StreamingCapabilities:
-      type: object
-      description: |
-        Shared capability fragment describing an operation's support for
-        opt-in Server-Sent Events (SSE) progress streaming.
-      additionalProperties: true
-      properties:
-        supportsStreaming:
-          type: boolean
-          description: |
-            Whether this operation supports opt-in SSE progress streaming,
-            selected per request with `Accept: text/event-stream`. Distinct
-            from `configuration.llm.stream`, which governs token-level
-            streaming from the LLM provider.
-        supportedProgressStages:
-          type:
-            - array
-            - 'null'
-          description: |
-            Optional list of `SseProgressStep.stage` values this service may
-            emit. Informative only; clients must tolerate unlisted stages.
-          items:
-            type: string
-    SseChatTerminalFrame:
-      type: object
-      description: |
-        Payload (`data`) of the single terminal SSE frame for `POST /chat`
-        (`event: completed | failed`). On `completed`, `output`/`metadata`
-        hold the endpoint's normal 200 body and `error` is absent. On
-        `failed`, `output` is null and `error` holds an ErrorResponse. The
-        HTTP status stays 200 regardless. `steps` is always present.
-      allOf:
-        - $ref: '#/components/schemas/SseTerminalSteps'
-        - type: object
-          properties:
-            output:
-              type:
-                - object
-                - 'null'
-              additionalProperties: true
-              description: The generated assistant response; null on a failed frame.
-            metadata:
-              type:
-                - object
-                - 'null'
-              additionalProperties: true
-              description: Optional metadata about response generation.
-            error:
-              type:
-                - object
-                - 'null'
-              description: Present only on a failed frame.
-              allOf:
-                - $ref: '#/components/schemas/ErrorResponse'
-    SseEvaluateTerminalFrame:
-      type: object
-      description: |
-        Payload (`data`) of the single terminal SSE frame for
-        `POST /evaluate` (`event: completed | failed`). On `completed`,
-        `feedback` holds the endpoint's normal 200 body and `error` is
-        absent. On `failed`, `feedback` is null and `error` holds an
-        ErrorResponse. The HTTP status stays 200 regardless. `steps` is
-        always present.
-      allOf:
-        - $ref: '#/components/schemas/SseTerminalSteps'
-        - type: object
-          properties:
-            feedback:
-              type:
-                - array
-                - 'null'
-              items:
-                $ref: '#/components/schemas/Feedback'
-              description: The generated feedback items; null on a failed frame.
-            error:
-              type:
-                - object
-                - 'null'
-              description: Present only on a failed frame.
-              allOf:
-                - $ref: '#/components/schemas/ErrorResponse'
   responses:
     202-Accepted:
       description: Request accepted for asynchronous evaluation processing.

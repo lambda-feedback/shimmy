@@ -51,6 +51,12 @@ func mustLoadMuEdSpecs() map[string][]byte {
 // MuEdSpecVersions returns the embedded spec versions in ascending order.
 // Ordering is lexical, which is sufficient while versions stay single-digit;
 // revisit if a component ever reaches double digits.
+//
+// The lexical sort also treats a pre-release tag as newer than its base
+// release: "0.1.1-dev" sorts after "0.1.0", so the dev spec is the "latest"
+// and drives the single-spec callers (LoadOpenAPISpec, MuEdHandler.Spec) that
+// need its SSE schemas. Note a future real "0.1.1" would sort *before*
+// "0.1.1-dev" — revisit this ordering when the dev tag is promoted.
 func MuEdSpecVersions() []string {
 	versions := make([]string, 0, len(MuEdOpenAPISpecs))
 	for v := range MuEdOpenAPISpecs {

@@ -40,6 +40,8 @@ func chatSSERequest(t *testing.T, body []byte) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(body))
 	req.Header.Set("Accept", "text/event-stream")
+	// SSE streaming is only offered on µEd versions whose contract declares it.
+	req.Header.Set("X-Api-Version", "0.1.1-dev")
 	return req
 }
 
@@ -228,6 +230,7 @@ func TestServeChat_SSE_Heartbeat(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/chat", bytes.NewReader(chatRequestBody(t)))
 	require.NoError(t, err)
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("X-Api-Version", "0.1.1-dev")
 
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	require.NoError(t, err)

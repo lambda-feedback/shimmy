@@ -127,6 +127,9 @@ func TestSSEEnvelopeStructTagsMatchSchema(t *testing.T) {
 
 // --- helpers ---
 
+// mustSpec loads the latest embedded µEd spec, which is 0.1.1-dev — the version
+// that carries the Sse* schemas these tests validate against. Canonical 0.1.0
+// deliberately does not define them.
 func mustSpec(t *testing.T) *openapi3.T {
 	t.Helper()
 	spec, err := server.LoadOpenAPISpec()

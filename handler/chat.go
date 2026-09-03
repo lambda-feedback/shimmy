@@ -55,7 +55,7 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 		callbackURL = *chatReq.CallbackUrl
 	}
 
-	streaming := h.streamingEnabled() && acceptsEventStream(r)
+	streaming := h.streamingEnabled() && acceptsEventStream(r) && adapter.SupportsStreaming()
 	if streaming {
 		if _, ok := w.(http.Flusher); !ok {
 			h.log.Warn("response writer is not a flusher; serving buffered response")

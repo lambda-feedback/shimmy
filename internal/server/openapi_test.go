@@ -25,8 +25,20 @@ func TestLoadOpenAPISpecs(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, specs)
 	assert.Contains(t, specs, "0.1.0")
+	assert.Contains(t, specs, "0.1.1-dev")
 	for version, spec := range specs {
 		assert.NotNilf(t, spec, "spec for %s", version)
+	}
+
+	// The opt-in SSE progress-streaming surface is a shimmy extension pending
+	// upstream µEd PRs: it lives in 0.1.1-dev only, never in canonical 0.1.0.
+	sseSchemas := []string{
+		"SseProgressStep", "SseTerminalSteps", "StreamingCapabilities",
+		"SseChatTerminalFrame", "SseEvaluateTerminalFrame",
+	}
+	for _, name := range sseSchemas {
+		assert.Containsf(t, specs["0.1.1-dev"].Components.Schemas, name, "0.1.1-dev should define %s", name)
+		assert.NotContainsf(t, specs["0.1.0"].Components.Schemas, name, "canonical 0.1.0 must not define %s", name)
 	}
 }
 

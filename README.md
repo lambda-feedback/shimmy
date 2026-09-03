@@ -66,7 +66,7 @@ GLOBAL OPTIONS:
    --progress-sidecar-burst-size value          how many worker-authored progress events at the start of an evaluation are exempt from the minimum spacing below, so a handful of legitimate back-to-back checkpoints aren't rate limited. (default: 5) [$PROGRESS_SIDECAR_BURST_SIZE]
    --progress-sidecar-min-event-interval value  the minimum spacing between worker-authored progress events relayed per evaluation, once the burst allowance above is used up. (default: 10ms) [$PROGRESS_SIDECAR_MIN_EVENT_INTERVAL]
    --progress-sidecar-unbind-grace-period value  how long to keep relaying worker-authored progress events after a request returns, so a fire-and-forget POST dispatched just before the result can still land. (default: 250ms) [$PROGRESS_SIDECAR_UNBIND_GRACE_PERIOD]
-   --progress-stream-enabled                   stream progress back on the /evaluate and /chat responses as Server-Sent Events for requests that send 'Accept: text/event-stream'. Standalone/serve mode only; ignored under AWS Lambda. (default: true) [$PROGRESS_STREAM_ENABLED]
+   --progress-stream-enabled                   stream progress back on the /evaluate and /chat responses as Server-Sent Events for requests that send 'Accept: text/event-stream' and negotiate 'X-Api-Version: 0.1.1-dev'. Standalone/serve mode only; ignored under AWS Lambda. (default: true) [$PROGRESS_STREAM_ENABLED]
    --progress-stream-heartbeat-seconds value   seconds between SSE heartbeat comments sent while an evaluation runs, so an idle streamed connection isn't dropped by an intermediary. 0 disables heartbeats. (default: 15) [$PROGRESS_STREAM_HEARTBEAT_SECONDS]
 
    function
@@ -295,6 +295,11 @@ stand up a `callbackUrl` receiver can opt in with an `Accept: text/event-stream`
 header. The shim then keeps the response open and streams [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
 as the request runs, instead of the buffered JSON body.
 
+- **Requires the `0.1.1-dev` µEd API version.** SSE progress streaming is a shimmy
+  extension not yet in the published µEd `0.1.0` contract, pending upstream standardisation,
+  so it lives in a separate `0.1.1-dev` version. Select it with an `X-Api-Version: 0.1.1-dev`
+  request header; a request that resolves to `0.1.0` (the pinned default for header-less
+  clients) always gets the buffered JSON body even with `Accept: text/event-stream`.
 - **Standalone / `serve` mode only.** Under AWS Lambda the proxy buffers the whole response,
   so the `Accept` header is ignored and the normal buffered JSON body is returned. Disable it
   everywhere with `--progress-stream-enabled=false`.
