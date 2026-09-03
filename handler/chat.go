@@ -15,7 +15,7 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version, ok := h.checkMuEdVersion(w, r)
+	version, adapter, ok := h.checkMuEdVersion(w, r)
 	if !ok {
 		return
 	}
@@ -31,13 +31,7 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var chatReq runtime.MuEdChatRequest
-	if err := json.Unmarshal(body, &chatReq); err != nil {
-		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", "invalid request body", nil)
-		return
-	}
-
-	reqData, err := runtime.MuEdBuildChatRequest(chatReq)
+	reqData, err := adapter.DecodeChat(body)
 	if err != nil {
 		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", err.Error(), nil)
 		return
@@ -55,7 +49,7 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	chatResp, err := runtime.MuEdToChatResponse(resultMap)
+	chatResp, err := adapter.EncodeChat(resultMap)
 	if err != nil {
 		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", err.Error(), nil)
 		return
@@ -73,7 +67,7 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version, ok := h.checkMuEdVersion(w, r)
+	version, adapter, ok := h.checkMuEdVersion(w, r)
 	if !ok {
 		return
 	}
@@ -95,7 +89,7 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	healthResp := runtime.MuEdToChatHealthResponse(resultMap)
+	healthResp := adapter.EncodeChatHealth(resultMap)
 
 	statusCode := http.StatusOK
 	if status, ok := healthResp["status"].(string); ok && status == string(runtime.MuEdChatHealthStatusUnavailable) {
