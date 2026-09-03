@@ -1,0 +1,43 @@
+# Synthetic µEd spec used only by openapi_test.go to exercise per-version spec
+# selection. It is a deliberately trimmed OpenAPI 3.1.0 document whose only
+# meaningful difference from v0.1.0 is that POST /evaluate additionally requires
+# an "extraField" property.
+openapi: 3.1.0
+info:
+  title: Synthetic µEd test spec
+  version: 0.2.0
+paths:
+  /evaluate:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - submission
+                - extraField
+              properties:
+                submission:
+                  type: object
+                extraField:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+  /evaluate/health:
+    get:
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object

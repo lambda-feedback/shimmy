@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 // Runtime is the interface for a runtime.
@@ -49,6 +50,11 @@ type RuntimeParams struct {
 	// Config is the config for the underlying runtime manager
 	Config Config
 
+	// Progress configures worker-authored progress event delivery (the
+	// EVAL_PROGRESS_URL side-channel). Provided by handler.Module, shared
+	// with the outbound callbackUrl delivery configuration.
+	Progress progress.Config
+
 	// Log is the logger to use for the runtime
 	Log *zap.Logger
 }
@@ -56,9 +62,10 @@ type RuntimeParams struct {
 // NewRuntime creates a new runtime.
 func NewRuntime(params RuntimeParams) (Runtime, error) {
 	dispatcher, err := execution.NewDispatcher(Params{
-		Context: params.Context,
-		Config:  params.Config,
-		Log:     params.Log,
+		Context:  params.Context,
+		Config:   params.Config,
+		Progress: params.Progress,
+		Log:      params.Log,
 	})
 	if err != nil {
 		return nil, err

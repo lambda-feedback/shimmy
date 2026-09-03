@@ -15,18 +15,13 @@ type ChatResponse struct {
 	Data map[string]any
 }
 
-type MuEdChatRole string
-
-const (
-	MuEdChatRoleUser      MuEdChatRole = "USER"
-	MuEdChatRoleAssistant MuEdChatRole = "ASSISTANT"
-	MuEdChatRoleSystem    MuEdChatRole = "SYSTEM"
-	MuEdChatRoleTool      MuEdChatRole = "TOOL"
-)
-
+// MuEdChatMessage is one entry in a chat request's messages array. Role
+// (USER / ASSISTANT / SYSTEM / TOOL per the µEd spec) is passed straight
+// through to the worker, never inspected by shimmy, so it stays an
+// untyped string like the other freeform chat fields.
 type MuEdChatMessage struct {
-	Role    MuEdChatRole `json:"role"`
-	Content string       `json:"content"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // MuEdChatRequest is the request body for the chat endpoint. Only messages
@@ -44,6 +39,11 @@ type MuEdChatRequest struct {
 	User           map[string]any    `json:"user,omitempty"`
 	Context        map[string]any    `json:"context,omitempty"`
 	Configuration  map[string]any    `json:"configuration,omitempty"`
+
+	// CallbackUrl, when set, receives out-of-band progress events for this
+	// chat request, exactly as on /evaluate. Part of the µEd request
+	// contract, not a shim-specific field.
+	CallbackUrl *string `json:"callbackUrl,omitempty"`
 }
 
 type MuEdChatHealthStatus string
@@ -105,7 +105,12 @@ func MuEdToChatResponse(result map[string]any) (map[string]any, error) {
 // this passes the worker's capabilities through largely as-is — it only
 // fills in the spec's required keys/defaults and normalises nil slices to
 // empty ones so they serialise as [] not null.
-func MuEdToChatHealthResponse(result map[string]any) map[string]any {
+//
+// SSE progress streaming is the exception: it is a shimmy-layer capability,
+// not the worker's, so supportsStreaming/supportedProgressStages are set
+// from streamingEnabled (shimmy's streaming build + config), overriding
+// anything the worker reported.
+func MuEdToChatHealthResponse(result map[string]any, streamingEnabled bool) map[string]any {
 	status, _ := result["status"].(string)
 	if status == "" {
 		status = string(MuEdChatHealthStatusOK)
@@ -126,6 +131,8 @@ func MuEdToChatHealthResponse(result map[string]any) map[string]any {
 			capabilities[key] = []string{}
 		}
 	}
+	capabilities["supportsStreaming"] = streamingEnabled
+	capabilities["supportedProgressStages"] = chatProgressStages
 
 	resp := map[string]any{
 		"status":       status,
@@ -138,4 +145,16 @@ func MuEdToChatHealthResponse(result map[string]any) map[string]any {
 		resp["version"] = version
 	}
 	return resp
+}
+
+// chatProgressStages is the set of SseProgressStep.stage values a /chat
+// SSE stream can emit, advertised via capabilities.supportedProgressStages.
+// The literals mirror the progress.Stage* constants; they are inlined here
+// to keep the runtime package free of a dependency on internal/progress.
+var chatProgressStages = []string{
+	"preparing",
+	"starting",
+	"thinking",
+	"completed",
+	"failed",
 }

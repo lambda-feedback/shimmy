@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution/worker"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 // fileAdapter is an adapter that allows supervisors to use files to
@@ -32,6 +33,9 @@ type fileAdapter struct {
 	// worker is the worker that is managed by the adapter.
 	worker worker.Worker
 
+	// sidecarCfg configures the worker-authored progress side-channel.
+	sidecarCfg progress.SidecarConfig
+
 	log *zap.Logger
 }
 
@@ -39,10 +43,12 @@ var _ Adapter = (*fileAdapter)(nil)
 
 func newFileAdapter(
 	workerFactory AdapterWorkerFactoryFn,
+	sidecarCfg progress.SidecarConfig,
 	log *zap.Logger,
 ) *fileAdapter {
 	return &fileAdapter{
 		workerFactory: workerFactory,
+		sidecarCfg:    sidecarCfg,
 		log:           log.Named("adapter_file"),
 	}
 }
@@ -153,14 +159,26 @@ func (a *fileAdapter) Send(
 
 	// ensure env is not nil
 	if startParams.Env == nil {
-		startParams.Env = make([]string, 0, 3)
+		startParams.Env = make([]string, 0, 4)
 	}
+
+	// the file interface is one process per request, so the sidecar is
+	// scoped entirely to this call - no Bind/Unbind swap needed, unlike
+	// the persistent rpcAdapter.
+	sidecar, err := progress.NewSidecar(a.sidecarCfg, a.log)
+	if err != nil {
+		return nil, fmt.Errorf("error starting progress sidecar: %w", err)
+	}
+	defer sidecar.Close()
+
+	sidecar.Bind(method, progress.FromContext(ctx))
 
 	// append req and res file names to worker env
 	startParams.Env = append(startParams.Env,
 		"EVAL_IO=FILE",
 		"EVAL_FILE_NAME_REQUEST="+reqFile.Name(),
 		"EVAL_FILE_NAME_RESPONSE="+resFile.Name(),
+		"EVAL_PROGRESS_URL="+sidecar.URL(),
 	)
 
 	// create the worker with modified args and env

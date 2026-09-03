@@ -34,10 +34,23 @@ type MuEdEvaluateRequest struct {
 	Task                  *MuEdTask                  `json:"task"`
 	Configuration         *MuEdConfiguration         `json:"configuration"`
 	PreSubmissionFeedback *MuEdPreSubmissionFeedback `json:"preSubmissionFeedback"`
+
+	// CallbackUrl is the µEd spec's optional HTTPS callback URL (see
+	// https://mued.org/spec, EvaluateRequest.callbackUrl). The spec
+	// describes it for asynchronous final-result delivery (the service
+	// may return 202 Accepted and POST the result here later); shimmy
+	// doesn't implement that 202 flow, but reuses this same field as the
+	// target for progress events, since both describe "send updates
+	// about this request to this URL" and a caller shouldn't need a
+	// shimmy-specific header for something the spec already defines.
+	CallbackUrl *string `json:"callbackUrl"`
 }
 
-// MuEdToHealthResponse converts a legacy runtime health result to muEd format.
-func MuEdToHealthResponse(result map[string]any) map[string]any {
+// MuEdToHealthResponse converts a legacy runtime health result to muEd
+// format. streamingEnabled is shimmy's own opt-in SSE progress-streaming
+// capability for this deployment (streaming build + config enabled); it
+// is advertised verbatim as capabilities.supportsStreaming.
+func MuEdToHealthResponse(result map[string]any, streamingEnabled bool) map[string]any {
 	status := "DEGRADED"
 	if passed, ok := result["tests_passed"].(bool); ok && passed {
 		status = "OK"
@@ -50,9 +63,24 @@ func MuEdToHealthResponse(result map[string]any) map[string]any {
 			"supportsFormativeFeedback":     true,
 			"supportsSummativeFeedback":     false,
 			"supportsDataPolicy":            "NOT_SUPPORTED",
-			"supportedAPIVersions":          SupportedMuEdVersions,
+			"supportedAPIVersions":          SupportedMuEdVersions(),
+			"supportsStreaming":             streamingEnabled,
+			"supportedProgressStages":       evaluateProgressStages,
 		},
 	}
+}
+
+// evaluateProgressStages is the set of SseProgressStep.stage values an
+// /evaluate SSE stream can emit, advertised via
+// capabilities.supportedProgressStages. The literals mirror the
+// progress.Stage* constants; they are inlined here to keep the runtime
+// package free of a dependency on internal/progress.
+var evaluateProgressStages = []string{
+	"preparing",
+	"starting",
+	"evaluating",
+	"completed",
+	"failed",
 }
 
 func muEdContentKey(t MuEdSubmissionType) string {

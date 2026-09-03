@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 type PooledDispatcher struct {
@@ -36,6 +37,10 @@ type PooledDispatcherParams struct {
 
 	// SupervisorFactory is the factory function to create a new supervisor
 	SupervisorFactory SupervisorFactory
+
+	// Progress configures worker-authored progress event delivery,
+	// passed through to each pooled supervisor.
+	Progress progress.Config
 
 	// Log is the logger to use for the dispatcher
 	Log *zap.Logger
@@ -157,9 +162,10 @@ func createPool(
 
 	constructor := func(ctx context.Context) (supervisor.Supervisor, error) {
 		sv, err := params.SupervisorFactory(supervisor.Params{
-			Context: ctx,
-			Config:  params.Config.Supervisor,
-			Log:     params.Log,
+			Context:  ctx,
+			Config:   params.Config.Supervisor,
+			Progress: params.Progress,
+			Log:      params.Log,
 		})
 		if err != nil {
 			return nil, err
