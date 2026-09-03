@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/getkin/kin-openapi/openapi3"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
@@ -19,10 +18,9 @@ type HttpServerParams struct {
 	Context context.Context
 
 	Config HttpConfig
-	Specs  map[string]*openapi3.T
+	Mux    *Mux
 
-	Handlers []*HttpHandler `group:"handlers"`
-	Logger   *zap.Logger
+	Logger *zap.Logger
 }
 
 type HttpServer struct {
@@ -33,19 +31,8 @@ type HttpServer struct {
 	log    *zap.Logger
 }
 
-func NewHttpServer(params HttpServerParams) (*HttpServer, error) {
-	mux := http.NewServeMux()
-
-	for _, handler := range params.Handlers {
-		mux.Handle(handler.Name, handler.Handler)
-	}
-
-	var handler http.Handler = NormalizePath(mux)
-	openAPIMiddleware, err := OpenAPIMiddleware(params.Specs, nil, params.Logger)
-	if err != nil {
-		return nil, fmt.Errorf("initialising OpenAPI middleware: %w", err)
-	}
-	handler = openAPIMiddleware(handler)
+func NewHttpServer(params HttpServerParams) *HttpServer {
+	var handler http.Handler = params.Mux
 	if params.Config.H2c {
 		handler = h2c.NewHandler(handler, &http2.Server{})
 	}
@@ -61,14 +48,11 @@ func NewHttpServer(params HttpServerParams) (*HttpServer, error) {
 		port:   params.Config.Port,
 		server: server,
 		log:    params.Logger,
-	}, nil
+	}
 }
 
-func NewLifecycleServer(params HttpServerParams, lc fx.Lifecycle) (*HttpServer, error) {
-	server, err := NewHttpServer(params)
-	if err != nil {
-		return nil, err
-	}
+func NewLifecycleServer(params HttpServerParams, lc fx.Lifecycle) *HttpServer {
+	server := NewHttpServer(params)
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			go server.Serve(ctx)
@@ -78,7 +62,7 @@ func NewLifecycleServer(params HttpServerParams, lc fx.Lifecycle) (*HttpServer, 
 			return server.Shutdown(ctx)
 		},
 	})
-	return server, nil
+	return server
 }
 
 func (s *HttpServer) Serve(context.Context) error {
