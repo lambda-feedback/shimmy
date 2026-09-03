@@ -224,7 +224,7 @@ Stages, in order:
 | `evaluating` | worker | A progress checkpoint the evaluation function reported during an `/evaluate` (or `/preview`) call. Zero or more, in the function's own order. |
 | `thinking` | worker | The `/chat` equivalent of `evaluating` — a checkpoint the chat function reported. |
 | `completed` | shim | The result has been computed. For `/evaluate`, `data.feedback` carries the same array as the synchronous body; for `/chat`, `data.output` carries the message. |
-| `failed` | shim | A terminal failure occurred. `message` is safe to show to an end user; `error` carries raw technical detail for logs only. |
+| `failed` | shim | A terminal failure occurred. `message` is a short end-user-safe line; `error` is an `ErrorResponse` object (`title`, optional `message`/`code`/`trace`/`details`) for programmatic handling and logs. |
 
 `completed` and `failed` are terminal — at most one of them is delivered per request, whichever occurs first. `preparing` and `starting` are each delivered at most once even for a multi-case evaluation that internally re-enters those stages per case.
 
@@ -252,6 +252,24 @@ Example terminal event, with the feedback payload attached:
     "feedback": [
       { "awardedPoints": 1, "message": "Well done" }
     ]
+  },
+  "timestamp": "2026-08-04T14:23:02.310Z"
+}
+```
+
+A `failed` terminal event carries an `error` object instead of `data`:
+
+```json
+{
+  "correlationId": "req-7c193f38",
+  "stage": "failed",
+  "command": "eval",
+  "message": "We couldn't evaluate your answer. Please try again.",
+  "error": {
+    "title": "Evaluation failed",
+    "message": "We couldn't evaluate your answer. Please try again.",
+    "code": "INTERNAL_ERROR",
+    "trace": "worker send: context deadline exceeded"
   },
   "timestamp": "2026-08-04T14:23:02.310Z"
 }
@@ -307,12 +325,12 @@ though a multi-case evaluation re-enters them per case; worker-authored `evaluat
 `timestamp`).
 
 The stream then ends with exactly one terminal frame — `event: completed` or `event: failed`
-— carrying the result plus every step that preceded it, and the connection closes:
+— carrying the endpoint's normal `200` body plus every step that preceded it, and the
+connection closes:
 
 ```
 event: completed
-data: {"command":"evaluate",
-       "feedback":[{"awardedPoints":1,"message":"Well done"}],
+data: {"feedback":[{"awardedPoints":1,"message":"Well done"}],
        "steps":[{"stage":"preparing","message":"Preparing…","timestamp":"…"},
                 {"stage":"starting","message":"Starting…","timestamp":"…"},
                 {"stage":"evaluating","message":"Ran 3/10 cases","data":{"completed":3,"total":10},"timestamp":"…"}]}
@@ -320,10 +338,12 @@ data: {"command":"evaluate",
 
 ```
 event: failed
-data: {"command":"evaluate","feedback":null,
+data: {"feedback":null,
        "steps":[ /* whatever streamed before the failure */ ],
-       "error":"worker send: context deadline exceeded",
-       "message":"We couldn't evaluate your answer. Please try again."}
+       "error":{"title":"Evaluation failed",
+                "message":"We couldn't evaluate your answer. Please try again.",
+                "code":"INTERNAL_ERROR",
+                "trace":"worker send: context deadline exceeded"}}
 ```
 
 For `/chat` the terminal frame carries `output` (and optional `metadata`) instead of
@@ -331,17 +351,17 @@ For `/chat` the terminal frame carries `output` (and optional `metadata`) instea
 
 ```
 event: completed
-data: {"command":"chat",
-       "output":{"role":"ASSISTANT","content":"…"},
+data: {"output":{"role":"ASSISTANT","content":"…"},
        "metadata":{ /* optional, worker-supplied */ },
        "steps":[ /* preparing, starting, thinking… */ ]}
 ```
-A failed `/chat` frame has `"output":null` plus `error`/`message`.
+A failed `/chat` frame has `"output":null` plus the same `error` object.
 
 Each element of the terminal frame's `steps[]` is byte-identical to the `data` payload of the
 live frame that carried it. The HTTP status is `200` even for a `failed` frame — the failure
-is in-band. `command` is `"evaluate"`, `"preview"`, or `"chat"`. The correlation id is in the
-`X-Request-Id` response header, not the body. Response headers: `Content-Type:
+is in-band. The terminal frame's `data` is the µEd spec's `SseEvaluateTerminalFrame` /
+`SseChatTerminalFrame`; on failure its `error` is a standard `ErrorResponse`. The correlation
+id is in the `X-Request-Id` response header, not the body. Response headers: `Content-Type:
 text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`, no `Content-Length`.
 
 While the request runs, the shim also writes an SSE comment heartbeat (`: ping`) every
