@@ -15,7 +15,7 @@ import (
 func TestMuEdBuildChatRequest_Valid(t *testing.T) {
 	req := runtime.MuEdChatRequest{
 		Messages: []runtime.MuEdChatMessage{
-			{Role: runtime.MuEdChatRoleUser, Content: "hello"},
+			{Role: "USER", Content: "hello"},
 		},
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)
@@ -44,7 +44,7 @@ func TestMuEdBuildChatRequest_NilMessages(t *testing.T) {
 func TestMuEdBuildChatRequest_OptionalFieldsOmitted(t *testing.T) {
 	req := runtime.MuEdChatRequest{
 		Messages: []runtime.MuEdChatMessage{
-			{Role: runtime.MuEdChatRoleUser, Content: "hi"},
+			{Role: "USER", Content: "hi"},
 		},
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)
@@ -60,7 +60,7 @@ func TestMuEdBuildChatRequest_OptionalFieldsOmitted(t *testing.T) {
 
 func TestMuEdBuildChatRequest_ConversationIDIncluded(t *testing.T) {
 	req := runtime.MuEdChatRequest{
-		Messages:       []runtime.MuEdChatMessage{{Role: runtime.MuEdChatRoleUser, Content: "hi"}},
+		Messages:       []runtime.MuEdChatMessage{{Role: "USER", Content: "hi"}},
 		ConversationID: "abc-123",
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)
@@ -85,7 +85,7 @@ func TestMuEdBuildChatRequest_UserPassedThroughIntact(t *testing.T) {
 		},
 	}
 	req := runtime.MuEdChatRequest{
-		Messages: []runtime.MuEdChatMessage{{Role: runtime.MuEdChatRoleUser, Content: "hi"}},
+		Messages: []runtime.MuEdChatMessage{{Role: "USER", Content: "hi"}},
 		User:     user,
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)
@@ -120,7 +120,7 @@ func TestMuEdBuildChatRequest_ContextPassedThroughIntact(t *testing.T) {
 		},
 	}
 	req := runtime.MuEdChatRequest{
-		Messages: []runtime.MuEdChatMessage{{Role: runtime.MuEdChatRoleUser, Content: "hi"}},
+		Messages: []runtime.MuEdChatMessage{{Role: "USER", Content: "hi"}},
 		Context:  context,
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)

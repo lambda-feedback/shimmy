@@ -17,18 +17,13 @@ type ChatResponse struct {
 	Data map[string]any
 }
 
-type MuEdChatRole string
-
-const (
-	MuEdChatRoleUser      MuEdChatRole = "USER"
-	MuEdChatRoleAssistant MuEdChatRole = "ASSISTANT"
-	MuEdChatRoleSystem    MuEdChatRole = "SYSTEM"
-	MuEdChatRoleTool      MuEdChatRole = "TOOL"
-)
-
+// MuEdChatMessage is one entry in a chat request's messages array. Role
+// (USER / ASSISTANT / SYSTEM / TOOL per the µEd spec) is passed straight
+// through to the worker, never inspected by shimmy, so it stays an
+// untyped string like the other freeform chat fields.
 type MuEdChatMessage struct {
-	Role    MuEdChatRole `json:"role"`
-	Content string       `json:"content"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // MuEdChatRequest is the request body for the chat endpoint. Only messages
