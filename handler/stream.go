@@ -21,11 +21,10 @@ import (
 // already committed, every outcome of run — including an internal error —
 // becomes a "failed" frame, never an HTTP error.
 //
-// cmdLabel selects the terminal envelope shape ("evaluate"/"preview" ->
-// feedback[]; "chat" -> output/metadata) and is the frame's "command".
-// command is the µEd command string carried on the emitted progress
-// events. doneMessage is the human-facing text on the terminal completed
-// event.
+// cmdLabel selects the terminal frame shape ("evaluate"/"preview" ->
+// feedback[]; "chat" -> output/metadata). command is the µEd command
+// string carried on the emitted progress events. doneMessage is the
+// human-facing text on the terminal completed event.
 //
 // run returns the terminal event's Data payload (e.g. {"feedback": …} or
 // {"output": …, "metadata": …}) on success, or a *terminalError. It must

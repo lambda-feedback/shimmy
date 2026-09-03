@@ -298,14 +298,16 @@ type terminalError struct {
 	status      int
 	body        []byte
 
-	// muEd* describe a shimmy-internal error for writeMuEdError (buffered
-	// path only).
+	// muEd* describe a shimmy-internal error. The buffered path passes
+	// them straight to writeMuEdError; both paths also feed them into the
+	// StageFailed event's ErrorInfo via progressErrorInfo.
 	muEdCode    string
 	muEdTitle   string
 	muEdMessage string
 
-	// userMessage and rawError feed the StageFailed progress event and,
-	// on the streaming path, the "failed" SSE frame.
+	// userMessage and rawError are the human-facing line and raw detail
+	// for the StageFailed progress event (Message / Error), and the
+	// fallbacks progressErrorInfo uses for the ErrorInfo message / trace.
 	userMessage string
 	rawError    string
 }
