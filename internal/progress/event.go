@@ -50,6 +50,19 @@ func (s Stage) terminal() bool {
 	return s == StageCompleted || s == StageFailed
 }
 
+// ErrorInfo is structured failure detail for a StageFailed event. On the
+// SSE terminal "failed" frame it is emitted as the frame's `error`
+// object, shaped like the µEd spec's ErrorResponse (title is required;
+// the rest are optional). It carries no student/teacher-facing copy —
+// that stays on Event.Message.
+type ErrorInfo struct {
+	Title   string         `json:"title"`
+	Message string         `json:"message,omitempty"`
+	Code    string         `json:"code,omitempty"`
+	Trace   string         `json:"trace,omitempty"`
+	Details map[string]any `json:"details,omitempty"`
+}
+
 // Event describes a single progress update for an evaluation request.
 type Event struct {
 	// Stage is the lifecycle point this event describes.
@@ -67,6 +80,12 @@ type Event struct {
 	// intended for logs/support diagnostics. Never display this to
 	// students or teachers directly; show Message instead.
 	Error string
+
+	// ErrorInfo is the structured failure detail for a StageFailed event.
+	// The SSE reporter emits it as the terminal "failed" frame's `error`
+	// object; when nil it falls back to a minimal object built from
+	// Message/Error. Ignored by non-SSE reporters.
+	ErrorInfo *ErrorInfo
 
 	// Data is a free-form extension point. On StageCompleted it carries
 	// the final result payload (so a callbackUrl-supplying caller gets the

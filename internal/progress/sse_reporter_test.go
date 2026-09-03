@@ -81,8 +81,8 @@ func TestSSEReporter_CompletedEnvelope(t *testing.T) {
 	if f.event != "completed" {
 		t.Errorf("expected event 'completed', got %q", f.event)
 	}
-	if f.data["command"] != "evaluate" {
-		t.Errorf("expected command 'evaluate', got %v", f.data["command"])
+	if _, hasCommand := f.data["command"]; hasCommand {
+		t.Errorf("terminal frame must not carry a command key: %v", f.data)
 	}
 	fb, ok := f.data["feedback"].([]any)
 	if !ok || len(fb) != 1 {
@@ -111,6 +111,12 @@ func TestSSEReporter_FailedEnvelope(t *testing.T) {
 		Stage:   StageFailed,
 		Error:   "worker send: context deadline exceeded",
 		Message: "We couldn't evaluate your answer. Please try again.",
+		ErrorInfo: &ErrorInfo{
+			Title:   "Evaluation failed",
+			Message: "We couldn't evaluate your answer. Please try again.",
+			Code:    "INTERNAL_ERROR",
+			Trace:   "worker send: context deadline exceeded",
+		},
 	})
 
 	frames := parseSSEFrames(t, rec.Body.String())
@@ -127,26 +133,47 @@ func TestSSEReporter_FailedEnvelope(t *testing.T) {
 	if v, ok := f.data["feedback"]; !ok || v != nil {
 		t.Errorf("expected feedback null, got %v (present=%v)", v, ok)
 	}
-	if f.data["error"] != "worker send: context deadline exceeded" {
-		t.Errorf("raw error not carried: %v", f.data["error"])
+	errObj, ok := f.data["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected error to be an ErrorResponse object, got %T: %v", f.data["error"], f.data["error"])
 	}
-	if f.data["message"] != "We couldn't evaluate your answer. Please try again." {
-		t.Errorf("user message not carried: %v", f.data["message"])
+	if errObj["title"] != "Evaluation failed" {
+		t.Errorf("error title not carried: %v", errObj["title"])
+	}
+	if errObj["message"] != "We couldn't evaluate your answer. Please try again." {
+		t.Errorf("error message not carried: %v", errObj["message"])
+	}
+	if errObj["trace"] != "worker send: context deadline exceeded" {
+		t.Errorf("error trace not carried: %v", errObj["trace"])
+	}
+	if _, hasMessage := f.data["message"]; hasMessage {
+		t.Errorf("terminal frame must not carry a top-level message key: %v", f.data)
 	}
 	if steps, _ := f.data["steps"].([]any); len(steps) != 1 {
 		t.Errorf("expected 1 step, got %v", f.data["steps"])
 	}
 }
 
-func TestSSEReporter_PreviewCommandLabel(t *testing.T) {
+func TestSSEReporter_PreviewUsesFeedbackEnvelope(t *testing.T) {
 	rec, r := newRecorderReporter(t, "preview")
 	r.Report(context.Background(), Event{
 		Stage: StageCompleted,
 		Data:  map[string]any{"feedback": []map[string]any{{"preSubmissionFeedback": map[string]any{}}}},
 	})
 	frames := parseSSEFrames(t, rec.Body.String())
-	if frames[0].data["command"] != "preview" {
-		t.Errorf("expected command 'preview', got %v", frames[0].data["command"])
+	f := frames[0]
+	if f.event != "completed" {
+		t.Fatalf("expected 'completed', got %q", f.event)
+	}
+	if _, hasCommand := f.data["command"]; hasCommand {
+		t.Errorf("terminal frame must not carry a command key: %v", f.data)
+	}
+	fb, ok := f.data["feedback"].([]any)
+	if !ok || len(fb) != 1 {
+		t.Fatalf("preview should use the feedback envelope, got %v", f.data["feedback"])
+	}
+	if _, ok := f.data["steps"].([]any); !ok {
+		t.Errorf("steps should always be present as an array, got %v", f.data["steps"])
 	}
 }
 
@@ -167,8 +194,8 @@ func TestSSEReporter_ChatEnvelope_Completed(t *testing.T) {
 		t.Fatalf("expected [thinking, completed], got %q", rec.Body.String())
 	}
 	f := frames[1]
-	if f.data["command"] != "chat" {
-		t.Errorf("expected command 'chat', got %v", f.data["command"])
+	if _, hasCommand := f.data["command"]; hasCommand {
+		t.Errorf("terminal frame must not carry a command key: %v", f.data)
 	}
 	if _, hasFeedback := f.data["feedback"]; hasFeedback {
 		t.Errorf("chat envelope must not carry a feedback key: %v", f.data)
@@ -192,6 +219,11 @@ func TestSSEReporter_ChatEnvelope_Failed(t *testing.T) {
 		Stage:   StageFailed,
 		Error:   "chat failed: worker exited",
 		Message: "We couldn't generate a response. Please try again.",
+		ErrorInfo: &ErrorInfo{
+			Title:   "Chat failed",
+			Message: "We couldn't generate a response. Please try again.",
+			Trace:   "chat failed: worker exited",
+		},
 	})
 
 	f := parseSSEFrames(t, rec.Body.String())[0]
@@ -201,8 +233,15 @@ func TestSSEReporter_ChatEnvelope_Failed(t *testing.T) {
 	if v, ok := f.data["output"]; !ok || v != nil {
 		t.Errorf("expected output null, got %v (present=%v)", v, ok)
 	}
-	if f.data["error"] != "chat failed: worker exited" {
-		t.Errorf("raw error not carried: %v", f.data["error"])
+	errObj, ok := f.data["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected error to be an ErrorResponse object, got %T: %v", f.data["error"], f.data["error"])
+	}
+	if errObj["title"] != "Chat failed" {
+		t.Errorf("error title not carried: %v", errObj["title"])
+	}
+	if errObj["trace"] != "chat failed: worker exited" {
+		t.Errorf("error trace not carried: %v", errObj["trace"])
 	}
 }
 
@@ -277,8 +316,12 @@ func TestSSEReporter_TerminalOnce(t *testing.T) {
 	if len(frames) != 1 {
 		t.Fatalf("expected exactly 1 terminal frame, got %d", len(frames))
 	}
-	if frames[0].data["message"] != "first" {
-		t.Errorf("expected the first terminal event to win, got %v", frames[0].data["message"])
+	if frames[0].event != "failed" {
+		t.Errorf("expected the first terminal event ('failed') to win, got %q", frames[0].event)
+	}
+	errObj, _ := frames[0].data["error"].(map[string]any)
+	if errObj["message"] != "first" {
+		t.Errorf("expected the first terminal event to win, got %v", errObj["message"])
 	}
 }
 

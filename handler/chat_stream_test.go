@@ -72,7 +72,7 @@ func TestServeChat_SSE_Success(t *testing.T) {
 
 	event, data := parseSSE(t, w.Body.String())
 	assert.Equal(t, "completed", event)
-	assert.Equal(t, "chat", data["command"])
+	assert.NotContains(t, data, "command", "the standardised terminal frame drops the command key")
 	if _, hasFeedback := data["feedback"]; hasFeedback {
 		t.Errorf("chat frame must not carry a feedback key: %v", data)
 	}
@@ -127,7 +127,10 @@ func TestServeChat_SSE_RuntimeError_BecomesFailedFrameAt200(t *testing.T) {
 	event, data := parseSSE(t, w.Body.String())
 	assert.Equal(t, "failed", event)
 	assert.Nil(t, data["output"])
-	assert.Contains(t, data["error"], "boom")
+	errObj, ok := data["error"].(map[string]any)
+	require.True(t, ok, "error should be an ErrorResponse object, got %T", data["error"])
+	assert.NotEmpty(t, errObj["title"])
+	assert.Contains(t, errObj["trace"], "boom")
 }
 
 func TestServeChat_SSE_CapabilityDisabled_FallsBackToJSON(t *testing.T) {
@@ -191,7 +194,7 @@ func TestServeChat_SSE_WithCallbackUrl_BothDelivered(t *testing.T) {
 
 	event, data := parseSSE(t, w.Body.String())
 	assert.Equal(t, "completed", event)
-	assert.Equal(t, "chat", data["command"])
+	assert.NotContains(t, data, "command", "the standardised terminal frame drops the command key")
 
 	require.Len(t, *received, 1)
 	evt := (*received)[0]

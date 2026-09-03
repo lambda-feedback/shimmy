@@ -1,6 +1,10 @@
 package runtime
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/lambda-feedback/shimmy/internal/progress"
+)
 
 type MuEdSubmissionType string
 
@@ -46,8 +50,11 @@ type MuEdEvaluateRequest struct {
 	CallbackUrl *string `json:"callbackUrl"`
 }
 
-// MuEdToHealthResponse converts a legacy runtime health result to muEd format.
-func MuEdToHealthResponse(result map[string]any) map[string]any {
+// MuEdToHealthResponse converts a legacy runtime health result to muEd
+// format. streamingEnabled is shimmy's own opt-in SSE progress-streaming
+// capability for this deployment (streaming build + config enabled); it
+// is advertised verbatim as capabilities.supportsStreaming.
+func MuEdToHealthResponse(result map[string]any, streamingEnabled bool) map[string]any {
 	status := "DEGRADED"
 	if passed, ok := result["tests_passed"].(bool); ok && passed {
 		status = "OK"
@@ -61,8 +68,21 @@ func MuEdToHealthResponse(result map[string]any) map[string]any {
 			"supportsSummativeFeedback":     false,
 			"supportsDataPolicy":            "NOT_SUPPORTED",
 			"supportedAPIVersions":          SupportedMuEdVersions,
+			"supportsStreaming":             streamingEnabled,
+			"supportedProgressStages":       evaluateProgressStages,
 		},
 	}
+}
+
+// evaluateProgressStages is the set of SseProgressStep.stage values an
+// /evaluate SSE stream can emit, advertised via
+// capabilities.supportedProgressStages.
+var evaluateProgressStages = []string{
+	string(progress.StagePreparing),
+	string(progress.StageStarting),
+	string(progress.StageEvaluating),
+	string(progress.StageCompleted),
+	string(progress.StageFailed),
 }
 
 func muEdContentKey(t MuEdSubmissionType) string {

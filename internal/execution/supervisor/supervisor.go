@@ -176,6 +176,12 @@ func (s *WorkerSupervisor) Send(
 			Command: method,
 			Message: "We couldn't start the request. Please try again.",
 			Error:   err.Error(),
+			ErrorInfo: &progress.ErrorInfo{
+				Title:   "Request failed",
+				Message: "We couldn't start the request. Please try again.",
+				Code:    "INTERNAL_ERROR",
+				Trace:   err.Error(),
+			},
 		})
 		return nil, fmt.Errorf("failed to acquire worker: %w", err)
 	}
@@ -199,6 +205,12 @@ func (s *WorkerSupervisor) Send(
 			Command: method,
 			Message: "Something went wrong. Please try again.",
 			Error:   err.Error(),
+			ErrorInfo: &progress.ErrorInfo{
+				Title:   "Request failed",
+				Message: "Something went wrong. Please try again.",
+				Code:    "INTERNAL_ERROR",
+				Trace:   err.Error(),
+			},
 		})
 	}
 

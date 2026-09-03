@@ -38,7 +38,12 @@ func TestSSEFrameSchemaParity(t *testing.T) {
 
 	t.Run("chat failed terminal frame", func(t *testing.T) {
 		rec, r := newRecorderReporter(t, "chat")
-		r.Report(ctx, Event{Stage: StageFailed, Error: "boom", Message: "We couldn't generate a response."})
+		r.Report(ctx, Event{
+			Stage:     StageFailed,
+			Error:     "boom",
+			Message:   "We couldn't generate a response.",
+			ErrorInfo: &ErrorInfo{Title: "Chat failed", Message: "We couldn't generate a response.", Trace: "boom"},
+		})
 		frames := parseSSEFrames(t, rec.Body.String())
 		mustValidate(t, spec, "SseChatTerminalFrame", frameByEvent(t, frames, "failed").data)
 	})
@@ -57,7 +62,12 @@ func TestSSEFrameSchemaParity(t *testing.T) {
 
 	t.Run("evaluate failed terminal frame", func(t *testing.T) {
 		rec, r := newRecorderReporter(t, "evaluate")
-		r.Report(ctx, Event{Stage: StageFailed, Error: "boom", Message: "We couldn't evaluate your answer."})
+		r.Report(ctx, Event{
+			Stage:     StageFailed,
+			Error:     "boom",
+			Message:   "We couldn't evaluate your answer.",
+			ErrorInfo: &ErrorInfo{Title: "Evaluation failed", Message: "We couldn't evaluate your answer.", Trace: "boom"},
+		})
 		frames := parseSSEFrames(t, rec.Body.String())
 		mustValidate(t, spec, "SseEvaluateTerminalFrame", frameByEvent(t, frames, "failed").data)
 	})
@@ -93,21 +103,19 @@ func TestSSEEnvelopeStructTagsMatchSchema(t *testing.T) {
 		{"SseProgressStep", step},
 		{"SseProgressStep", sseStep{Stage: "thinking", Timestamp: now, Data: map[string]any{"k": "v"}}},
 		{"SseChatTerminalFrame", sseChatEnvelope{
-			Command:  "chat",
 			Output:   map[string]any{"role": "ASSISTANT", "content": "hi"},
 			Metadata: map[string]any{"responseTimeMs": 12},
 			Steps:    []sseStep{step},
 		}},
 		{"SseChatTerminalFrame", sseChatEnvelope{
-			Command: "chat", Steps: []sseStep{step}, Error: "boom", Message: "failed",
+			Steps: []sseStep{step}, Error: &ErrorInfo{Title: "Chat failed", Message: "failed", Trace: "boom"},
 		}},
 		{"SseEvaluateTerminalFrame", sseEnvelope{
-			Command:  "evaluate",
 			Feedback: []map[string]any{{"feedbackId": "fb-1", "message": "ok"}},
 			Steps:    []sseStep{step},
 		}},
 		{"SseEvaluateTerminalFrame", sseEnvelope{
-			Command: "evaluate", Steps: []sseStep{step}, Error: "boom", Message: "failed",
+			Steps: []sseStep{step}, Error: &ErrorInfo{Title: "Evaluation failed", Message: "failed", Trace: "boom"},
 		}},
 	}
 	for _, c := range cases {
@@ -141,11 +149,34 @@ func assertAllFieldsDocumented(t *testing.T, spec *openapi3.T, schemaName string
 	if ref == nil || ref.Value == nil {
 		t.Fatalf("component schema %q not found", schemaName)
 	}
+	documented := documentedProps(ref.Value)
 	for k := range m {
-		if ref.Value.Properties[k] == nil {
+		if !documented[k] {
 			t.Errorf("%s: field %q is emitted by the struct but not a documented property", schemaName, k)
 		}
 	}
+}
+
+// documentedProps collects every property name a schema documents,
+// following allOf composition (the Sse*TerminalFrame schemas merge a
+// shared SseTerminalSteps fragment with an inline branch).
+func documentedProps(schema *openapi3.Schema) map[string]bool {
+	out := map[string]bool{}
+	if schema == nil {
+		return out
+	}
+	for k := range schema.Properties {
+		out[k] = true
+	}
+	for _, sub := range schema.AllOf {
+		if sub == nil || sub.Value == nil {
+			continue
+		}
+		for k := range documentedProps(sub.Value) {
+			out[k] = true
+		}
+	}
+	return out
 }
 
 func frameByEvent(t *testing.T, frames []sseFrame, event string) sseFrame {

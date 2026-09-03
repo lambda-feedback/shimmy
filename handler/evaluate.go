@@ -309,6 +309,29 @@ type terminalError struct {
 	rawError    string
 }
 
+// progressErrorInfo maps the terminalError to the structured error object
+// carried on the StageFailed progress event and emitted as the SSE
+// "failed" frame's `error` (shaped like the spec's ErrorResponse). title
+// falls back to fallbackTitle when the error has no µEd title (e.g. a
+// worker-response passthrough), so the object always satisfies
+// ErrorResponse, whose only required field is title.
+func (e *terminalError) progressErrorInfo(fallbackTitle string) *progress.ErrorInfo {
+	title := e.muEdTitle
+	if title == "" {
+		title = fallbackTitle
+	}
+	msg := e.muEdMessage
+	if msg == "" {
+		msg = e.userMessage
+	}
+	return &progress.ErrorInfo{
+		Title:   title,
+		Message: msg,
+		Code:    e.muEdCode,
+		Trace:   e.rawError,
+	}
+}
+
 // produceFeedback turns a runtime response into muEd feedback, or a
 // terminalError describing why it couldn't. It is pure: no writes, no
 // progress events.
@@ -442,7 +465,7 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := runtime.MuEdToHealthResponse(legacyResult)
+	result := runtime.MuEdToHealthResponse(legacyResult, h.streamingCapable && h.config.Progress.Stream.Enabled)
 
 	statusCode := http.StatusOK
 	if s, ok := result["status"].(string); ok && s == "UNAVAILABLE" {

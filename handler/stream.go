@@ -88,14 +88,20 @@ func (h *MuEdHandler) streamProgress(
 		}()
 	}
 
+	failTitle := "Evaluation failed"
+	if cmdLabel == "chat" {
+		failTitle = "Chat failed"
+	}
+
 	data, termErr := run(ctx)
 	switch {
 	case termErr != nil:
 		progress.Emit(ctx, progress.Event{
-			Stage:   progress.StageFailed,
-			Command: command,
-			Message: termErr.userMessage,
-			Error:   termErr.rawError,
+			Stage:     progress.StageFailed,
+			Command:   command,
+			Message:   termErr.userMessage,
+			Error:     termErr.rawError,
+			ErrorInfo: termErr.progressErrorInfo(failTitle),
 		})
 	case h.terminalFrameInvalid(cmdLabel, data):
 		progress.Emit(ctx, progress.Event{
@@ -103,6 +109,11 @@ func (h *MuEdHandler) streamProgress(
 			Command: command,
 			Message: "We couldn't produce a valid response. Please try again.",
 			Error:   "SSE terminal payload failed OpenAPI validation",
+			ErrorInfo: &progress.ErrorInfo{
+				Title:   "Invalid response",
+				Message: "We couldn't produce a valid response. Please try again.",
+				Code:    "INTERNAL_ERROR",
+			},
 		})
 	default:
 		progress.Emit(ctx, progress.Event{

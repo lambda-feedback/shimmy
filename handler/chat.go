@@ -176,6 +176,8 @@ func (h *MuEdHandler) produceChatOutput(resp runtime.ChatResponse, chatErr error
 
 // ServeChatHealth handles GET /chat/health.
 func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set(muEdRequestIDHeader, resolveRequestID(r))
+
 	if !h.checkAuth(w, r) {
 		return
 	}
@@ -202,7 +204,7 @@ func (h *MuEdHandler) ServeChatHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	healthResp := runtime.MuEdToChatHealthResponse(resultMap)
+	healthResp := runtime.MuEdToChatHealthResponse(resultMap, h.streamingCapable && h.config.Progress.Stream.Enabled)
 
 	statusCode := http.StatusOK
 	if status, ok := healthResp["status"].(string); ok && status == string(runtime.MuEdChatHealthStatusUnavailable) {

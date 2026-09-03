@@ -133,7 +133,7 @@ func TestServeEvaluate_SSE_Success(t *testing.T) {
 
 	event, data := parseSSE(t, w.Body.String())
 	assert.Equal(t, "completed", event)
-	assert.Equal(t, "evaluate", data["command"])
+	assert.NotContains(t, data, "command", "the standardised terminal frame drops the command key")
 
 	fb, ok := data["feedback"].([]any)
 	require.True(t, ok, "feedback should be an array: %v", data["feedback"])
@@ -202,7 +202,7 @@ func TestServeEvaluate_SSE_Preview(t *testing.T) {
 
 	event, data := parseSSE(t, w.Body.String())
 	assert.Equal(t, "completed", event)
-	assert.Equal(t, "preview", data["command"])
+	assert.NotContains(t, data, "command", "the standardised terminal frame drops the command key")
 	fb := data["feedback"].([]any)
 	require.Len(t, fb, 1)
 	_, ok := fb[0].(map[string]any)["preSubmissionFeedback"]
@@ -228,8 +228,12 @@ func TestServeEvaluate_SSE_WorkerNon200_BecomesFailedFrameAt200(t *testing.T) {
 	event, data := parseSSE(t, w.Body.String())
 	assert.Equal(t, "failed", event)
 	assert.Nil(t, data["feedback"])
-	assert.Equal(t, "boom", data["message"])
-	assert.Contains(t, data["error"], "boom")
+	errObj, ok := data["error"].(map[string]any)
+	require.True(t, ok, "error should be an ErrorResponse object, got %T", data["error"])
+	assert.NotEmpty(t, errObj["title"])
+	assert.Equal(t, "boom", errObj["message"])
+	assert.Contains(t, errObj["trace"], "boom")
+	assert.NotContains(t, data, "message", "failure detail now lives in the error object, not a top-level message")
 }
 
 func TestServeEvaluate_SSE_UnparseableWorkerResponse_FailedFrame(t *testing.T) {
@@ -247,6 +251,9 @@ func TestServeEvaluate_SSE_UnparseableWorkerResponse_FailedFrame(t *testing.T) {
 	event, data := parseSSE(t, w.Body.String())
 	assert.Equal(t, "failed", event)
 	assert.Nil(t, data["feedback"])
+	errObj, ok := data["error"].(map[string]any)
+	require.True(t, ok, "error should be an ErrorResponse object, got %T", data["error"])
+	assert.NotEmpty(t, errObj["title"])
 }
 
 func TestServeEvaluate_SSE_CapabilityDisabled_FallsBackToJSON(t *testing.T) {
@@ -310,7 +317,7 @@ func TestServeEvaluate_SSE_WithCallbackUrl_BothDelivered(t *testing.T) {
 	// SSE side
 	event, data := parseSSE(t, w.Body.String())
 	assert.Equal(t, "completed", event)
-	assert.Equal(t, "evaluate", data["command"])
+	assert.NotContains(t, data, "command", "the standardised terminal frame drops the command key")
 
 	// callbackUrl side
 	require.Len(t, *received, 1)
@@ -431,7 +438,7 @@ func TestServeEvaluate_SSE_ThroughOpenAPIMiddleware(t *testing.T) {
 	require.NoError(t, err)
 	event, data := parseSSE(t, string(raw))
 	assert.Equal(t, "completed", event)
-	assert.Equal(t, "evaluate", data["command"])
+	assert.NotContains(t, data, "command", "the standardised terminal frame drops the command key")
 }
 
 func mustMarshal(t *testing.T, v any) []byte {

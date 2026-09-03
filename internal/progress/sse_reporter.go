@@ -24,26 +24,24 @@ type sseStep struct {
 
 // sseEnvelope is the JSON payload of the single terminal SSE frame for an
 // /evaluate (or /preview) request. The same shape is used for the
-// "completed" and "failed" events: on failure Feedback is null and
-// Error/Message carry the detail.
+// "completed" and "failed" events: on failure Feedback is null and Error
+// (an ErrorResponse-shaped object) carries the detail. It matches the
+// spec's SseEvaluateTerminalFrame.
 type sseEnvelope struct {
-	Command  string           `json:"command"`
 	Feedback []map[string]any `json:"feedback"`
 	Steps    []sseStep        `json:"steps"`
-	Error    string           `json:"error,omitempty"`
-	Message  string           `json:"message,omitempty"`
+	Error    *ErrorInfo       `json:"error,omitempty"`
 }
 
 // sseChatEnvelope is the terminal-frame payload for a /chat request. Chat
 // has no feedback[]; it returns an output object plus optional metadata.
-// On failure Output is null and Error/Message carry the detail.
+// On failure Output is null and Error carries the detail. It matches the
+// spec's SseChatTerminalFrame.
 type sseChatEnvelope struct {
-	Command  string         `json:"command"`
 	Output   map[string]any `json:"output"`
 	Metadata map[string]any `json:"metadata,omitempty"`
 	Steps    []sseStep      `json:"steps"`
-	Error    string         `json:"error,omitempty"`
-	Message  string         `json:"message,omitempty"`
+	Error    *ErrorInfo     `json:"error,omitempty"`
 }
 
 // SSEReporter is a Reporter that streams progress back to the caller on
@@ -145,6 +143,17 @@ func (r *SSEReporter) Report(_ context.Context, evt Event) {
 	r.writeStepLocked(step)
 }
 
+// failureErrorInfo returns the ErrorResponse-shaped object for a "failed"
+// terminal frame. It prefers the structured ErrorInfo the handler
+// attached; failing that it synthesises a minimal object from the event's
+// human-facing Message and raw Error so `title` is never empty.
+func failureErrorInfo(evt Event) *ErrorInfo {
+	if evt.ErrorInfo != nil {
+		return evt.ErrorInfo
+	}
+	return &ErrorInfo{Title: "Error", Message: evt.Message, Trace: evt.Error}
+}
+
 func (r *SSEReporter) writeEnvelopeLocked(evt Event) {
 	steps := r.steps
 	if steps == nil {
@@ -159,20 +168,18 @@ func (r *SSEReporter) writeEnvelopeLocked(evt Event) {
 
 	var payload any
 	if r.command == "chat" {
-		env := sseChatEnvelope{Command: r.command, Steps: steps}
+		env := sseChatEnvelope{Steps: steps}
 		if failed {
-			env.Error = evt.Error
-			env.Message = evt.Message
+			env.Error = failureErrorInfo(evt)
 		} else {
 			env.Output, _ = evt.Data["output"].(map[string]any)
 			env.Metadata, _ = evt.Data["metadata"].(map[string]any)
 		}
 		payload = env
 	} else {
-		env := sseEnvelope{Command: r.command, Steps: steps}
+		env := sseEnvelope{Steps: steps}
 		if failed {
-			env.Error = evt.Error
-			env.Message = evt.Message
+			env.Error = failureErrorInfo(evt)
 		} else {
 			feedback, ok := evt.Data["feedback"].([]map[string]any)
 			if !ok {
