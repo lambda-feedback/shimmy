@@ -19,7 +19,7 @@ type HttpServerParams struct {
 	Context context.Context
 
 	Config HttpConfig
-	Spec   *openapi3.T
+	Specs  map[string]*openapi3.T
 
 	Handlers []*HttpHandler `group:"handlers"`
 	Logger   *zap.Logger
@@ -41,7 +41,7 @@ func NewHttpServer(params HttpServerParams) (*HttpServer, error) {
 	}
 
 	var handler http.Handler = NormalizePath(mux)
-	openAPIMiddleware, err := OpenAPIMiddleware(params.Spec, params.Logger)
+	openAPIMiddleware, err := OpenAPIMiddleware(params.Specs, nil, params.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("initialising OpenAPI middleware: %w", err)
 	}

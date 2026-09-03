@@ -1,19 +1,19 @@
 package runtime
 
-var SupportedMuEdVersions = []string{"0.1.0"}
-
-func MuEdIsVersionSupported(version string) bool {
-	for _, v := range SupportedMuEdVersions {
-		if v == version {
-			return true
-		}
-	}
-	return false
+// SupportedMuEdVersions returns the µEd API versions this build supports, in
+// registration order (oldest first). Backed by DefaultMuEdRegistry.
+func SupportedMuEdVersions() []string {
+	return defaultMuEdRegistry.Versions()
 }
 
+// MuEdIsVersionSupported reports whether the given µEd API version is supported.
+func MuEdIsVersionSupported(version string) bool {
+	return defaultMuEdRegistry.Supports(version)
+}
+
+// MuEdResolveVersion maps a requested µEd API version to a concrete supported
+// one: the default version when requested is empty, the request itself when
+// supported, otherwise the latest supported version.
 func MuEdResolveVersion(requested string) string {
-	if MuEdIsVersionSupported(requested) {
-		return requested
-	}
-	return SupportedMuEdVersions[len(SupportedMuEdVersions)-1]
+	return defaultMuEdRegistry.Resolve(requested)
 }

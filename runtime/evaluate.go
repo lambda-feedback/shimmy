@@ -50,7 +50,7 @@ func MuEdToHealthResponse(result map[string]any) map[string]any {
 			"supportsFormativeFeedback":     true,
 			"supportsSummativeFeedback":     false,
 			"supportsDataPolicy":            "NOT_SUPPORTED",
-			"supportedAPIVersions":          SupportedMuEdVersions,
+			"supportedAPIVersions":          SupportedMuEdVersions(),
 		},
 	}
 }

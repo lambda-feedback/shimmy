@@ -19,26 +19,38 @@ const muEdVersionHeader = "X-Api-Version"
 type MuEdHandlerParams struct {
 	fx.In
 
-	Handler runtime.Handler
-	Runtime runtime.Runtime
-	Config  config.Config
-	Log     *zap.Logger
+	Handler  runtime.Handler
+	Runtime  runtime.Runtime
+	Registry *runtime.MuEdRegistry
+	Config   config.Config
+	Log      *zap.Logger
 }
 
 type MuEdHandler struct {
-	handler runtime.Handler
-	runtime runtime.Runtime
-	config  config.Config
-	log     *zap.Logger
+	handler  runtime.Handler
+	runtime  runtime.Runtime
+	registry *runtime.MuEdRegistry
+	config   config.Config
+	log      *zap.Logger
 }
 
 func NewMuEdHandler(params MuEdHandlerParams) *MuEdHandler {
 	return &MuEdHandler{
-		handler: params.Handler,
-		runtime: params.Runtime,
-		config:  params.Config,
-		log:     params.Log,
+		handler:  params.Handler,
+		runtime:  params.Runtime,
+		registry: params.Registry,
+		config:   params.Config,
+		log:      params.Log,
 	}
+}
+
+// muEdRegistry returns the handler's version registry, falling back to the
+// process-wide default when none was injected (e.g. in unit tests).
+func (h *MuEdHandler) muEdRegistry() *runtime.MuEdRegistry {
+	if h.registry != nil {
+		return h.registry
+	}
+	return runtime.DefaultMuEdRegistry()
 }
 
 func writeJSONError(w http.ResponseWriter, msg string, status int) {
@@ -47,30 +59,33 @@ func writeJSONError(w http.ResponseWriter, msg string, status int) {
 	json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"message": msg}}) //nolint:errcheck
 }
 
-// checkMuEdVersion validates the X-Api-Version request header.
-// Returns (resolvedVersion, true) on success, or writes a 406 and returns ("", false).
-func (h *MuEdHandler) checkMuEdVersion(w http.ResponseWriter, r *http.Request) (string, bool) {
+// checkMuEdVersion validates the X-Api-Version request header and resolves it to
+// a concrete version adapter. Returns (resolvedVersion, adapter, true) on
+// success, or writes a 406 and returns ("", nil, false).
+func (h *MuEdHandler) checkMuEdVersion(w http.ResponseWriter, r *http.Request) (string, runtime.MuEdAdapter, bool) {
+	reg := h.muEdRegistry()
 	requested := r.Header.Get(muEdVersionHeader)
-	if requested != "" && !runtime.MuEdIsVersionSupported(requested) {
+	if requested != "" && !reg.Supports(requested) {
 		body, _ := json.Marshal(map[string]any{
 			"title": "API version not supported",
 			"message": fmt.Sprintf(
 				"The requested API version '%s' is not supported. Supported versions are: %v.",
-				requested, runtime.SupportedMuEdVersions,
+				requested, reg.Versions(),
 			),
 			"code": "VERSION_NOT_SUPPORTED",
 			"details": map[string]any{
 				"requestedVersion":  requested,
-				"supportedVersions": runtime.SupportedMuEdVersions,
+				"supportedVersions": reg.Versions(),
 			},
 		})
-		w.Header().Set(muEdVersionHeader, runtime.MuEdResolveVersion(requested))
+		w.Header().Set(muEdVersionHeader, reg.Resolve(requested))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotAcceptable)
 		w.Write(body) //nolint:errcheck
-		return "", false
+		return "", nil, false
 	}
-	return runtime.MuEdResolveVersion(requested), true
+	version := reg.Resolve(requested)
+	return version, reg.Adapter(version), true
 }
 
 // writeMuEdError writes a structured muEd JSON error response with X-Api-Version header.
@@ -102,7 +117,7 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version, ok := h.checkMuEdVersion(w, r)
+	version, adapter, ok := h.checkMuEdVersion(w, r)
 	if !ok {
 		return
 	}
@@ -118,20 +133,7 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var muEdReq runtime.MuEdEvaluateRequest
-	if err := json.Unmarshal(body, &muEdReq); err != nil {
-		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", "invalid request body", nil)
-		return
-	}
-
-	isPreview := muEdReq.PreSubmissionFeedback != nil && muEdReq.PreSubmissionFeedback.Enabled
-
-	var legacyBody map[string]any
-	if isPreview {
-		legacyBody, err = runtime.MuEdBuildLegacyPreviewRequest(muEdReq)
-	} else {
-		legacyBody, err = runtime.MuEdBuildLegacyEvaluateRequest(muEdReq)
-	}
+	legacyBody, command, err := adapter.DecodeEvaluate(body)
 	if err != nil {
 		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", err.Error(), nil)
 		return
@@ -141,11 +143,6 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "failed to build request", nil)
 		return
-	}
-
-	command := runtime.CommandEvaluate
-	if isPreview {
-		command = runtime.CommandPreview
 	}
 
 	header := http.Header{}
@@ -184,11 +181,10 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var feedback []map[string]any
-	if isPreview {
-		feedback = runtime.MuEdToPreviewFeedback(result)
-	} else {
-		feedback = runtime.MuEdToEvaluateFeedback(result)
+	feedback, err := adapter.EncodeEvaluateFeedback(command, result)
+	if err != nil {
+		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "failed to build feedback", nil)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -203,7 +199,7 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	version, ok := h.checkMuEdVersion(w, r)
+	version, adapter, ok := h.checkMuEdVersion(w, r)
 	if !ok {
 		return
 	}
@@ -228,7 +224,7 @@ func (h *MuEdHandler) ServeHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := runtime.MuEdToHealthResponse(legacyResult)
+	result := adapter.EncodeHealth(legacyResult)
 
 	statusCode := http.StatusOK
 	if s, ok := result["status"].(string); ok && s == "UNAVAILABLE" {
