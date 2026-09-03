@@ -49,6 +49,68 @@ func TestHTTPCallbackReporter_Report_DeliversPayload(t *testing.T) {
 	}
 }
 
+func TestHTTPCallbackReporter_Report_FailedEventCarriesStructuredError(t *testing.T) {
+	var mu sync.Mutex
+	var received []payload
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p payload
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			t.Errorf("failed to decode payload: %v", err)
+		}
+		mu.Lock()
+		received = append(received, p)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	r := newTestReporter(t, srv.URL, time.Second)
+	r.Report(context.Background(), Event{
+		Stage:     StageFailed,
+		Message:   "We couldn't evaluate your answer.",
+		Error:     "worker exited 1",
+		ErrorInfo: &ErrorInfo{Title: "Evaluation failed", Message: "We couldn't evaluate your answer.", Code: "INTERNAL_ERROR", Trace: "worker exited 1"},
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(received))
+	}
+	got := received[0].Error
+	if got == nil {
+		t.Fatalf("expected a structured error object on the failed callback payload")
+	}
+	if got.Title != "Evaluation failed" || got.Code != "INTERNAL_ERROR" || got.Trace != "worker exited 1" {
+		t.Errorf("error object not carried through: %+v", got)
+	}
+}
+
+func TestHTTPCallbackReporter_Report_NonFailedEventHasNoError(t *testing.T) {
+	var mu sync.Mutex
+	var received []payload
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p payload
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		mu.Lock()
+		received = append(received, p)
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	r := newTestReporter(t, srv.URL, time.Second)
+	r.Report(context.Background(), Event{Stage: StageCompleted, Message: "done"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 1 || received[0].Error != nil {
+		t.Fatalf("expected no error object on a non-failed event, got %+v", received)
+	}
+}
+
 func TestHTTPCallbackReporter_Report_TerminalEventDeliveredOnlyOnce(t *testing.T) {
 	var mu sync.Mutex
 	var count int

@@ -406,6 +406,11 @@ func TestMuEdServeEvaluate_ProgressCallback_Failure(t *testing.T) {
 	assert.Equal(t, "corr-2", evt["correlationId"])
 	assert.Equal(t, "failed", evt["stage"])
 	assert.Equal(t, "boom", evt["message"])
+	// error is the same ErrorResponse-shaped object as on the SSE frame.
+	errObj, ok := evt["error"].(map[string]any)
+	require.True(t, ok, "callback error should be an ErrorResponse object, got %T", evt["error"])
+	assert.NotEmpty(t, errObj["title"])
+	assert.Equal(t, "boom", errObj["message"])
 }
 
 func TestMuEdServeEvaluate_ProgressCallback_NoCallbackUrl_Unchanged(t *testing.T) {

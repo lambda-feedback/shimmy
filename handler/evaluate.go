@@ -239,10 +239,11 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	feedback, termErr := h.produceFeedback(resp, isPreview)
 	if termErr != nil {
 		progress.Emit(ctx, progress.Event{
-			Stage:   progress.StageFailed,
-			Command: string(command),
-			Message: termErr.userMessage,
-			Error:   termErr.rawError,
+			Stage:     progress.StageFailed,
+			Command:   string(command),
+			Message:   termErr.userMessage,
+			Error:     termErr.rawError,
+			ErrorInfo: termErr.progressErrorInfo("Evaluation failed"),
 		})
 
 		if termErr.passthrough {

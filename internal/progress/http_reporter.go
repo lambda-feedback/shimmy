@@ -11,13 +11,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// payload is the JSON body POSTed to the callback URL for each event.
+// payload is the JSON body POSTed to the callback URL for each event. On
+// a StageFailed event, error is an ErrorResponse-shaped object identical
+// to the one on the SSE terminal "failed" frame, so a callbackUrl
+// consumer and an SSE consumer handle failure the same way.
 type payload struct {
 	CorrelationID string         `json:"correlationId"`
 	Stage         Stage          `json:"stage"`
 	Command       string         `json:"command,omitempty"`
 	Message       string         `json:"message,omitempty"`
-	Error         string         `json:"error,omitempty"`
+	Error         *ErrorInfo     `json:"error,omitempty"`
 	Data          map[string]any `json:"data,omitempty"`
 	Timestamp     time.Time      `json:"timestamp"`
 }
@@ -75,12 +78,16 @@ func (r *httpCallbackReporter) Report(ctx context.Context, evt Event) {
 }
 
 func (r *httpCallbackReporter) send(ctx context.Context, evt Event) {
+	var errInfo *ErrorInfo
+	if evt.Stage == StageFailed {
+		errInfo = failureErrorInfo(evt)
+	}
 	body, err := json.Marshal(payload{
 		CorrelationID: r.correlationID,
 		Stage:         evt.Stage,
 		Command:       evt.Command,
 		Message:       evt.Message,
-		Error:         evt.Error,
+		Error:         errInfo,
 		Data:          evt.Data,
 		Timestamp:     evt.Timestamp,
 	})

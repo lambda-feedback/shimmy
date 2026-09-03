@@ -84,10 +84,11 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 	output, metadata, termErr := h.produceChatOutput(resp, err)
 	if termErr != nil {
 		progress.Emit(ctx, progress.Event{
-			Stage:   progress.StageFailed,
-			Command: string(runtime.CommandChat),
-			Message: termErr.userMessage,
-			Error:   termErr.rawError,
+			Stage:     progress.StageFailed,
+			Command:   string(runtime.CommandChat),
+			Message:   termErr.userMessage,
+			Error:     termErr.rawError,
+			ErrorInfo: termErr.progressErrorInfo("Chat failed"),
 		})
 		h.writeMuEdError(w, version, termErr.status, termErr.muEdCode, termErr.muEdTitle, termErr.muEdMessage, nil)
 		return
