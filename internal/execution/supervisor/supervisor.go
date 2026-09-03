@@ -184,6 +184,7 @@ func (s *WorkerSupervisor) Send(
 			},
 		})
 		return nil, fmt.Errorf("failed to acquire worker: %w", err)
+
 	}
 	progress.Emit(ctx, progress.Event{
 		Stage:   progress.StagePreparing,

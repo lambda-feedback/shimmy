@@ -59,6 +59,8 @@ type sseChatEnvelope struct {
 type SSEReporter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
+	// command ("evaluate" | "preview" | "chat") only selects the terminal
+	// frame shape (feedback[] vs output/metadata); it is not serialised.
 	command string
 	log     *zap.Logger
 

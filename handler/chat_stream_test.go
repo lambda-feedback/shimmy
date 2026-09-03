@@ -292,6 +292,9 @@ func TestServeChat_SSE_TerminalPayloadValidated(t *testing.T) {
 		event, data := parseSSE(t, w.Body.String())
 		assert.Equal(t, "failed", event)
 		assert.Nil(t, data["output"])
+		errObj, ok := data["error"].(map[string]any)
+		require.True(t, ok, "error should be an ErrorResponse object, got %T", data["error"])
+		assert.Equal(t, "Invalid response", errObj["title"])
 	})
 }
 
