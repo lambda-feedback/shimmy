@@ -83,6 +83,25 @@ jobs:
 #          name: Go-results
 #          path: TestResults.json
 
+  govulncheck:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ./go.mod
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
   test-sandbox:
     name: Sandbox Integration Tests
     runs-on: ubuntu-latest
