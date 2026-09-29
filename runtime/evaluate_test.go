@@ -209,6 +209,71 @@ func TestMuEdBuildLegacyPreviewRequest(t *testing.T) {
 	})
 }
 
+// fullMuEdRequest decodes a muEd request carrying fields beyond the typed ones.
+func fullMuEdRequest(t *testing.T, preview bool) runtime.MuEdEvaluateRequest {
+	t.Helper()
+	raw := `{
+		"submission": {"type": "MATH", "format": "latex", "content": {"expression": "x^2"}},
+		"task": {"title": "Square", "referenceSolution": {"expression": "x^2"}},
+		"user": {"type": "LEARNER"},
+		"criteria": [{"name": "correctness"}],
+		"callbackUrl": "https://example.com/cb",
+		"configuration": {"params": {"strict": true, "task": "override"}, "llm": {"model": "m"}}
+	}`
+	var req runtime.MuEdEvaluateRequest
+	require.NoError(t, json.Unmarshal([]byte(raw), &req))
+	if preview {
+		req.Raw["preSubmissionFeedback"] = map[string]any{"enabled": true}
+	}
+	return req
+}
+
+func TestMuEdEvaluateRequest_UnmarshalCapturesRaw(t *testing.T) {
+	req := fullMuEdRequest(t, false)
+
+	assert.Equal(t, runtime.MuEdMath, req.Submission.Type)
+	assert.Equal(t, map[string]any{"expression": "x^2"}, req.Task.ReferenceSolution)
+	for _, key := range []string{"submission", "task", "user", "criteria", "callbackUrl", "configuration"} {
+		assert.Contains(t, req.Raw, key)
+	}
+}
+
+func TestMuEdBuildLegacyRequest_ForwardsAllFields(t *testing.T) {
+	assertParams := func(t *testing.T, params map[string]any) {
+		t.Helper()
+		assert.Equal(t, true, params["strict"])
+		assert.Equal(t, map[string]any{"type": "LEARNER"}, params["user"])
+		assert.Equal(t, []any{map[string]any{"name": "correctness"}}, params["criteria"])
+		assert.Equal(t, "https://example.com/cb", params["callbackUrl"])
+		assert.Equal(t, "latex", params["submission"].(map[string]any)["format"])
+		assert.Equal(t, map[string]any{"model": "m"}, params["configuration"].(map[string]any)["llm"])
+		// configuration.params win over top-level muEd fields on collision
+		assert.Equal(t, "override", params["task"])
+	}
+
+	t.Run("evaluate", func(t *testing.T) {
+		body, err := runtime.MuEdBuildLegacyEvaluateRequest(fullMuEdRequest(t, false))
+		require.NoError(t, err)
+		assert.Equal(t, "x^2", body["response"])
+		assertParams(t, body["params"].(map[string]any))
+	})
+
+	t.Run("preview", func(t *testing.T) {
+		body, err := runtime.MuEdBuildLegacyPreviewRequest(fullMuEdRequest(t, true))
+		require.NoError(t, err)
+		params := body["params"].(map[string]any)
+		assertParams(t, params)
+		assert.Equal(t, map[string]any{"enabled": true}, params["preSubmissionFeedback"])
+	})
+
+	t.Run("does not mutate raw request", func(t *testing.T) {
+		req := fullMuEdRequest(t, false)
+		_, err := runtime.MuEdBuildLegacyEvaluateRequest(req)
+		require.NoError(t, err)
+		assert.NotContains(t, req.Raw, "strict")
+	})
+}
+
 func TestMuEdToEvalFeedback(t *testing.T) {
 	t.Run("is_correct true gives awardedPoints 1", func(t *testing.T) {
 		result := map[string]any{"is_correct": true, "feedback": "Well done"}

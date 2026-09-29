@@ -1,6 +1,10 @@
 package runtime
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"maps"
+)
 
 type MuEdSubmissionType string
 
@@ -34,6 +38,28 @@ type MuEdEvaluateRequest struct {
 	Task                  *MuEdTask                  `json:"task"`
 	Configuration         *MuEdConfiguration         `json:"configuration"`
 	PreSubmissionFeedback *MuEdPreSubmissionFeedback `json:"preSubmissionFeedback"`
+
+	// Raw holds every top-level field of the request as received, including
+	// fields not modelled above, so they can be forwarded to the function.
+	Raw map[string]any `json:"-"`
+}
+
+// UnmarshalJSON decodes the typed fields and also captures the full request in Raw.
+func (r *MuEdEvaluateRequest) UnmarshalJSON(data []byte) error {
+	type alias MuEdEvaluateRequest
+	var typed alias
+	if err := json.Unmarshal(data, &typed); err != nil {
+		return err
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	*r = MuEdEvaluateRequest(typed)
+	r.Raw = raw
+	return nil
 }
 
 // MuEdToHealthResponse converts a legacy runtime health result to muEd format.
@@ -83,14 +109,21 @@ func muEdExtractContent(content map[string]any, t MuEdSubmissionType) (any, erro
 	return nil, fmt.Errorf("could not extract content for submission type %s", t)
 }
 
+// muEdExtractParams merges every top-level muEd request field with
+// configuration.params into a flat params map. configuration.params take
+// precedence on a name collision, so existing params are never shadowed.
 func muEdExtractParams(req MuEdEvaluateRequest) map[string]any {
-	if req.Configuration != nil && req.Configuration.Params != nil {
-		return req.Configuration.Params
+	params := make(map[string]any, len(req.Raw))
+	maps.Copy(params, req.Raw)
+
+	if req.Configuration != nil {
+		maps.Copy(params, req.Configuration.Params)
 	}
-	return map[string]any{}
+	return params
 }
 
 // MuEdBuildLegacyEvaluateRequest builds {response, answer, params} for the evaluate command.
+// params carries the full muEd request merged with configuration.params.
 func MuEdBuildLegacyEvaluateRequest(req MuEdEvaluateRequest) (map[string]any, error) {
 	response, err := muEdExtractContent(req.Submission.Content, req.Submission.Type)
 	if err != nil {
@@ -114,6 +147,7 @@ func MuEdBuildLegacyEvaluateRequest(req MuEdEvaluateRequest) (map[string]any, er
 }
 
 // MuEdBuildLegacyPreviewRequest builds {response, params} for the preview command.
+// params carries the full muEd request merged with configuration.params.
 func MuEdBuildLegacyPreviewRequest(req MuEdEvaluateRequest) (map[string]any, error) {
 	response, err := muEdExtractContent(req.Submission.Content, req.Submission.Type)
 	if err != nil {

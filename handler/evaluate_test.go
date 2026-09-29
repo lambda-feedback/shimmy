@@ -142,6 +142,48 @@ func TestMuEdServeEvaluate_LegacyBodyForwarded(t *testing.T) {
 	mockHandler.AssertExpectations(t)
 }
 
+func TestMuEdServeEvaluate_AllFieldsForwardedAsParams(t *testing.T) {
+	reqBody, _ := json.Marshal(map[string]any{
+		"submission": map[string]any{
+			"type":    "MATH",
+			"content": map[string]any{"expression": "x^2"},
+		},
+		"task": map[string]any{
+			"title":             "Square",
+			"referenceSolution": map[string]any{"expression": "x^2"},
+		},
+		"user":          map[string]any{"type": "LEARNER"},
+		"configuration": map[string]any{"params": map[string]any{"strict": true}},
+	})
+
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.MatchedBy(func(r runtime.Request) bool {
+		var body map[string]any
+		if err := json.Unmarshal(r.Body, &body); err != nil {
+			return false
+		}
+		params, ok := body["params"].(map[string]any)
+		if !ok {
+			return false
+		}
+		task, _ := params["task"].(map[string]any)
+		user, _ := params["user"].(map[string]any)
+		return params["strict"] == true &&
+			task["title"] == "Square" &&
+			user["type"] == "LEARNER" &&
+			params["submission"] != nil &&
+			params["configuration"] != nil
+	})).Return(evalHandlerResponse(true, "Correct"))
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	newMuEdHandler(mockHandler, nil, "").ServeEvaluate(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Result().StatusCode)
+	mockHandler.AssertExpectations(t)
+}
+
 func TestMuEdServeEvaluate_Preview(t *testing.T) {
 	previewBody, _ := json.Marshal(map[string]any{
 		"submission": map[string]any{
