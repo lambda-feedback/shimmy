@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution/worker"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 // AdapterWorkerFactoryFn is a type alias for a function that creates a worker
@@ -42,20 +43,26 @@ type Adapter interface {
 
 // MARK: - factory
 
-// defaultAdapterFactory is the default adapter factory
-// that creates an adapter based on the given IO mode.
-func defaultAdapterFactory(
-	workerFactory AdapterWorkerFactoryFn,
-	config IOConfig,
-	log *zap.Logger,
-) (Adapter, error) {
-	switch config.Interface {
-	case FileIO:
-		return newFileAdapter(workerFactory, log), nil
-	case RpcIO:
-		return newRpcAdapter(workerFactory, config.Rpc, log), nil
-	default:
-		return nil, ErrUnsupportedIOInterface
+// newDefaultAdapterFactory returns the default AdapterFactoryFn, wiring
+// each created adapter's worker-authored progress side-channel (see
+// internal/progress.Sidecar) with the given limits. It's a closure rather
+// than a plain function so that AdapterFactoryFn's signature - and every
+// test double built against it - doesn't need to carry progress.Config
+// through every caller.
+func newDefaultAdapterFactory(progressCfg progress.Config) AdapterFactoryFn {
+	return func(
+		workerFactory AdapterWorkerFactoryFn,
+		config IOConfig,
+		log *zap.Logger,
+	) (Adapter, error) {
+		switch config.Interface {
+		case FileIO:
+			return newFileAdapter(workerFactory, progressCfg.Sidecar, log), nil
+		case RpcIO:
+			return newRpcAdapter(workerFactory, config.Rpc, progressCfg.Sidecar, log), nil
+		default:
+			return nil, ErrUnsupportedIOInterface
+		}
 	}
 }
 

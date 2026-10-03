@@ -23,4 +23,7 @@ lcov.info
 go.work
 
 # Local .env files
-*.local.idea/
+*.local
+
+# IDE / editor
+.idea/

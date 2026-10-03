@@ -13,6 +13,8 @@ func Module(config Config) fx.Option {
 		"serve",
 		// rename logger for module
 		logging.DecorateLogger("serve"),
+		// the standalone HTTP server can stream responses incrementally
+		fx.Supply(handler.StreamingCapability{Enabled: true}),
 		// provide handlers
 		handler.Module(),
 		// provide server

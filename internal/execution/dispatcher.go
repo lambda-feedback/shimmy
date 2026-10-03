@@ -7,6 +7,7 @@ import (
 
 	"github.com/lambda-feedback/shimmy/internal/execution/dispatcher"
 	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 type Dispatcher dispatcher.Dispatcher
@@ -27,6 +28,10 @@ type Params struct {
 	// Config is the config for the dispatcher and the underlying supervisors
 	Config Config
 
+	// Progress configures worker-authored progress event delivery,
+	// passed through to the underlying supervisor(s).
+	Progress progress.Config
+
 	// Log is the logger to use for the dispatcher
 	Log *zap.Logger
 }
@@ -38,8 +43,9 @@ func NewDispatcher(params Params) (dispatcher.Dispatcher, error) {
 				Config: dispatcher.DedicatedDispatcherConfig{
 					Supervisor: params.Config.Supervisor,
 				},
-				Context: params.Context,
-				Log:     params.Log,
+				Context:  params.Context,
+				Progress: params.Progress,
+				Log:      params.Log,
 			},
 		)
 	} else {
@@ -49,8 +55,9 @@ func NewDispatcher(params Params) (dispatcher.Dispatcher, error) {
 					Supervisor: params.Config.Supervisor,
 					MaxWorkers: params.Config.MaxWorkers,
 				},
-				Context: params.Context,
-				Log:     params.Log,
+				Context:  params.Context,
+				Progress: params.Progress,
+				Log:      params.Log,
 			},
 		)
 	}

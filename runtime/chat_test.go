@@ -15,7 +15,7 @@ import (
 func TestMuEdBuildChatRequest_Valid(t *testing.T) {
 	req := runtime.MuEdChatRequest{
 		Messages: []runtime.MuEdChatMessage{
-			{Role: runtime.MuEdChatRoleUser, Content: "hello"},
+			{Role: "USER", Content: "hello"},
 		},
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)
@@ -44,7 +44,7 @@ func TestMuEdBuildChatRequest_NilMessages(t *testing.T) {
 func TestMuEdBuildChatRequest_OptionalFieldsOmitted(t *testing.T) {
 	req := runtime.MuEdChatRequest{
 		Messages: []runtime.MuEdChatMessage{
-			{Role: runtime.MuEdChatRoleUser, Content: "hi"},
+			{Role: "USER", Content: "hi"},
 		},
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)
@@ -60,7 +60,7 @@ func TestMuEdBuildChatRequest_OptionalFieldsOmitted(t *testing.T) {
 
 func TestMuEdBuildChatRequest_ConversationIDIncluded(t *testing.T) {
 	req := runtime.MuEdChatRequest{
-		Messages:       []runtime.MuEdChatMessage{{Role: runtime.MuEdChatRoleUser, Content: "hi"}},
+		Messages:       []runtime.MuEdChatMessage{{Role: "USER", Content: "hi"}},
 		ConversationID: "abc-123",
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)
@@ -85,7 +85,7 @@ func TestMuEdBuildChatRequest_UserPassedThroughIntact(t *testing.T) {
 		},
 	}
 	req := runtime.MuEdChatRequest{
-		Messages: []runtime.MuEdChatMessage{{Role: runtime.MuEdChatRoleUser, Content: "hi"}},
+		Messages: []runtime.MuEdChatMessage{{Role: "USER", Content: "hi"}},
 		User:     user,
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)
@@ -120,7 +120,7 @@ func TestMuEdBuildChatRequest_ContextPassedThroughIntact(t *testing.T) {
 		},
 	}
 	req := runtime.MuEdChatRequest{
-		Messages: []runtime.MuEdChatMessage{{Role: runtime.MuEdChatRoleUser, Content: "hi"}},
+		Messages: []runtime.MuEdChatMessage{{Role: "USER", Content: "hi"}},
 		Context:  context,
 	}
 	body, err := runtime.MuEdBuildChatRequest(req)
@@ -208,7 +208,7 @@ func TestMuEdToChatHealthResponse_Valid(t *testing.T) {
 		"statusMessage": "partially degraded",
 		"version":       "1.2.3",
 	}
-	resp := runtime.MuEdToChatHealthResponse(result)
+	resp := runtime.MuEdToChatHealthResponse(result, true)
 	assert.Equal(t, "DEGRADED", resp["status"])
 	assert.Equal(t, "partially degraded", resp["statusMessage"])
 	assert.Equal(t, "1.2.3", resp["version"])
@@ -221,29 +221,34 @@ func TestMuEdToChatHealthResponse_Valid(t *testing.T) {
 	assert.Equal(t, []string{}, capabilities["supportedLanguages"])
 	assert.Equal(t, []string{}, capabilities["supportedModels"])
 	assert.Equal(t, []string{}, capabilities["supportedAPIVersions"])
+	// SSE progress streaming is shimmy-authoritative, driven by the arg.
+	assert.Equal(t, true, capabilities["supportsStreaming"])
+	assert.Contains(t, capabilities["supportedProgressStages"], "thinking")
 }
 
 func TestMuEdToChatHealthResponse_CapabilitiesPassedThroughIntact(t *testing.T) {
 	// The worker is authoritative on its own capabilities (unlike evaluate,
 	// which hardcodes them) — arbitrary worker-supplied keys must survive.
+	// SSE progress streaming is the exception: it is a shimmy-layer
+	// capability, so the worker's supportsStreaming is overridden.
 	result := map[string]any{
 		"status": "OK",
 		"capabilities": map[string]any{
 			"supportsChat":            true,
 			"supportsUserPreferences": true,
-			"supportsStreaming":       false,
+			"supportsStreaming":       true,
 			"supportsDataPolicy":      "PARTIAL",
 			"supportedLanguages":      []any{"en", "de"},
 			"supportedModels":         []any{"gpt-4o"},
 			"supportedAPIVersions":    []any{"0.1.0"},
 		},
 	}
-	resp := runtime.MuEdToChatHealthResponse(result)
+	resp := runtime.MuEdToChatHealthResponse(result, false)
 	capabilities, ok := resp["capabilities"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, true, capabilities["supportsChat"])
 	assert.Equal(t, true, capabilities["supportsUserPreferences"])
-	assert.Equal(t, false, capabilities["supportsStreaming"])
+	assert.Equal(t, false, capabilities["supportsStreaming"], "shimmy overrides the worker's streaming flag")
 	assert.Equal(t, "PARTIAL", capabilities["supportsDataPolicy"])
 	assert.Equal(t, []any{"en", "de"}, capabilities["supportedLanguages"])
 	assert.Equal(t, []any{"gpt-4o"}, capabilities["supportedModels"])
@@ -251,12 +256,12 @@ func TestMuEdToChatHealthResponse_CapabilitiesPassedThroughIntact(t *testing.T) 
 }
 
 func TestMuEdToChatHealthResponse_DefaultsStatusOK(t *testing.T) {
-	resp := runtime.MuEdToChatHealthResponse(map[string]any{})
+	resp := runtime.MuEdToChatHealthResponse(map[string]any{}, false)
 	assert.Equal(t, "OK", resp["status"])
 }
 
 func TestMuEdToChatHealthResponse_DefaultsMissingCapabilities(t *testing.T) {
-	resp := runtime.MuEdToChatHealthResponse(map[string]any{})
+	resp := runtime.MuEdToChatHealthResponse(map[string]any{}, false)
 	capabilities, ok := resp["capabilities"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, false, capabilities["supportsChat"])
@@ -264,7 +269,7 @@ func TestMuEdToChatHealthResponse_DefaultsMissingCapabilities(t *testing.T) {
 }
 
 func TestMuEdToChatHealthResponse_NilSlicesDefaultToEmpty(t *testing.T) {
-	resp := runtime.MuEdToChatHealthResponse(map[string]any{})
+	resp := runtime.MuEdToChatHealthResponse(map[string]any{}, false)
 
 	raw, err := json.Marshal(resp)
 	require.NoError(t, err)

@@ -56,6 +56,19 @@ GLOBAL OPTIONS:
 
    --auth-key value, -k value  the authentication key to use for incoming requests. [$AUTH_KEY]
 
+   progress
+
+   --progress-callback-timeout value          the timeout for a single progress callback delivery. (default: 1s) [$PROGRESS_CALLBACK_TIMEOUT]
+   --progress-allowed-hosts value [ --progress-allowed-hosts value ]  restrict progress callback URLs to these hosts. Entries may be an exact hostname or a "*.example.com" wildcard. Unset allows any host, subject to the private-network guard below. [$PROGRESS_ALLOWED_HOSTS]
+   --progress-allow-private-networks          allow progress callback delivery to loopback, link-local, and private IP addresses. Leave disabled unless the callback target is known to live on a trusted private network. (default: false) [$PROGRESS_ALLOW_PRIVATE_NETWORKS]
+   --progress-sidecar-max-body-bytes value     the maximum size, in bytes, of a single worker-authored progress event POST. (default: 16384) [$PROGRESS_SIDECAR_MAX_BODY_BYTES]
+   --progress-sidecar-max-events value         the maximum number of worker-authored progress events relayed per evaluation. (default: 50) [$PROGRESS_SIDECAR_MAX_EVENTS]
+   --progress-sidecar-burst-size value          how many worker-authored progress events at the start of an evaluation are exempt from the minimum spacing below, so a handful of legitimate back-to-back checkpoints aren't rate limited. (default: 5) [$PROGRESS_SIDECAR_BURST_SIZE]
+   --progress-sidecar-min-event-interval value  the minimum spacing between worker-authored progress events relayed per evaluation, once the burst allowance above is used up. (default: 10ms) [$PROGRESS_SIDECAR_MIN_EVENT_INTERVAL]
+   --progress-sidecar-unbind-grace-period value  how long to keep relaying worker-authored progress events after a request returns, so a fire-and-forget POST dispatched just before the result can still land. (default: 250ms) [$PROGRESS_SIDECAR_UNBIND_GRACE_PERIOD]
+   --progress-stream-enabled                   stream progress back on the /evaluate and /chat responses as Server-Sent Events for requests that send 'Accept: text/event-stream' and negotiate 'X-Api-Version: 0.1.1-dev'. Standalone/serve mode only; ignored under AWS Lambda. (default: true) [$PROGRESS_STREAM_ENABLED]
+   --progress-stream-heartbeat-seconds value   seconds between SSE heartbeat comments sent while an evaluation runs, so an idle streamed connection isn't dropped by an intermediary. 0 disables heartbeats. (default: 15) [$PROGRESS_STREAM_HEARTBEAT_SECONDS]
+
    function
 
    --arg value, -a value [ --arg value, -a value ]  additional arguments for to the worker process. [$FUNCTION_ARGS]
@@ -186,6 +199,215 @@ Example request using cases:
 }
 ```
 
+### Progress Events
+
+The shim also exposes µEd-compatible endpoints at `POST /evaluate` and `POST /chat` (see the [µEd spec](https://mued.org/spec)), separate from the legacy `POST /` endpoint documented above. When a client calls either with a `callbackUrl` in the request body, the shim POSTs a small JSON event to that URL at each stage of processing — in addition to, not instead of, the normal synchronous HTTP response.
+
+This lets a caller show progress to the end user (e.g. "Starting…") without polling, and without the shim needing to hold a connection open. It works identically whether the shim is deployed standalone or on AWS Lambda.
+
+To opt in, include `callbackUrl` in the request body and, optionally, an `X-Request-Id` header — both are part of the µEd spec's own request contract, not shim-specific additions. Every event echoes back the `X-Request-Id` value verbatim so the caller can correlate it with the original request.
+
+```json
+{
+  "submission": { "type": "TEXT", "content": { "text": "..." } },
+  "task": { "referenceSolution": { "text": "..." } },
+  "callbackUrl": "https://your-service.example.com/hooks/shimmy-progress"
+}
+```
+
+Stages, in order:
+
+| Stage | Producer | Meaning |
+|-------|----------|---------|
+| `preparing` | shim | A worker is being made ready (freshly booted or reused from the pool). Emitted once per request. |
+| `starting` | shim | The worker is about to be invoked. Emitted once per request. |
+| `evaluating` | worker | A progress checkpoint the evaluation function reported during an `/evaluate` (or `/preview`) call. Zero or more, in the function's own order. |
+| `thinking` | worker | The `/chat` equivalent of `evaluating` — a checkpoint the chat function reported. |
+| `completed` | shim | The result has been computed. For `/evaluate`, `data.feedback` carries the same array as the synchronous body; for `/chat`, `data.output` carries the message. |
+| `failed` | shim | A terminal failure occurred. `message` is a short end-user-safe line; `error` is an `ErrorResponse` object (`title`, optional `message`/`code`/`trace`/`details`) for programmatic handling and logs. |
+
+`completed` and `failed` are terminal — at most one of them is delivered per request, whichever occurs first. `preparing` and `starting` are each delivered at most once even for a multi-case evaluation that internally re-enters those stages per case.
+
+Example event body:
+
+```json
+{
+  "correlationId": "req-7c193f38",
+  "stage": "starting",
+  "command": "eval",
+  "message": "Starting…",
+  "timestamp": "2026-08-04T14:23:01.512Z"
+}
+```
+
+Example terminal event, with the feedback payload attached:
+
+```json
+{
+  "correlationId": "req-7c193f38",
+  "stage": "completed",
+  "command": "eval",
+  "message": "Feedback is ready.",
+  "data": {
+    "feedback": [
+      { "awardedPoints": 1, "message": "Well done" }
+    ]
+  },
+  "timestamp": "2026-08-04T14:23:02.310Z"
+}
+```
+
+A `failed` terminal event carries an `error` object instead of `data`:
+
+```json
+{
+  "correlationId": "req-7c193f38",
+  "stage": "failed",
+  "command": "eval",
+  "message": "We couldn't evaluate your answer. Please try again.",
+  "error": {
+    "title": "Evaluation failed",
+    "message": "We couldn't evaluate your answer. Please try again.",
+    "code": "INTERNAL_ERROR",
+    "trace": "worker send: context deadline exceeded"
+  },
+  "timestamp": "2026-08-04T14:23:02.310Z"
+}
+```
+
+Delivery is best-effort and never blocks or fails the evaluation itself: each callback POST is bounded by `--progress-callback-timeout` (default `1s`, see [Usage](#usage)); a slow, unreachable, or erroring receiver is logged and skipped, never surfaced to the caller as an evaluation failure.
+
+#### Callback URL safety (SSRF protection)
+
+Since `callbackUrl` is caller-supplied, the shim guards against it being used to reach services it shouldn't be able to reach:
+
+- **By default**, callback delivery refuses to dial loopback, link-local (this includes cloud metadata endpoints like `169.254.169.254`), and private (RFC1918/RFC4193) IP addresses — checked against the address actually resolved and dialed, not just the URL's literal hostname, so a public-looking domain that resolves to a private address is still blocked. Set `--progress-allow-private-networks` only if the callback target is known to live on a private network you trust (e.g. a same-VPC service).
+- **`--progress-allowed-hosts`** optionally restricts callback URLs to an explicit list of hostnames (exact match, or `*.example.com` wildcards). Unset means any (non-private) host is accepted.
+
+A rejected callback URL behaves like any other delivery failure: it's logged and skipped, never surfaced to the caller as an evaluation failure.
+
+> **Note:** the µEd spec describes `callbackUrl` for asynchronous *final-result* delivery — the service may return `202 Accepted` immediately and POST the result later. The shim doesn't implement that 202 flow; it always responds synchronously with `200 OK` and the feedback body as normal. It reuses the same `callbackUrl` field to additionally deliver progress events — including the final feedback, via the `completed` event's `data` field — rather than requiring a shim-specific header for the same concept.
+
+#### Streaming progress on the response itself (Server-Sent Events)
+
+A caller that would rather receive progress on the `/evaluate` or `/chat` response than
+stand up a `callbackUrl` receiver can opt in with an `Accept: text/event-stream` request
+header. The shim then keeps the response open and streams [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
+as the request runs, instead of the buffered JSON body.
+
+- **Requires the `0.1.1-dev` µEd API version.** SSE progress streaming is a shimmy
+  extension not yet in the published µEd `0.1.0` contract, pending upstream standardisation,
+  so it lives in a separate `0.1.1-dev` version. Select it with an `X-Api-Version: 0.1.1-dev`
+  request header; a request that resolves to `0.1.0` (the pinned default for header-less
+  clients) always gets the buffered JSON body even with `Accept: text/event-stream`.
+- **Standalone / `serve` mode only.** Under AWS Lambda the proxy buffers the whole response,
+  so the `Accept` header is ignored and the normal buffered JSON body is returned. Disable it
+  everywhere with `--progress-stream-enabled=false`.
+- Works alongside `callbackUrl`: if a request carries both, every event is delivered to the
+  stream **and** POSTed to the callback.
+- The connection is bound to the request context — if the caller disconnects, the work is
+  cancelled.
+
+Each non-terminal event is written as its own frame the moment it occurs, so the caller sees
+progress live (`/evaluate` shown; `/chat` is identical but with `thinking` frames in place
+of `evaluating`):
+
+```
+event: preparing
+data: {"stage":"preparing","message":"Preparing…","timestamp":"2026-08-31T09:16:29.474Z"}
+
+event: starting
+data: {"stage":"starting","message":"Starting…","timestamp":"2026-08-31T09:16:29.474Z"}
+
+event: evaluating
+data: {"stage":"evaluating","message":"Ran 3/10 cases","data":{"completed":3,"total":10},"timestamp":"2026-08-31T09:16:29.522Z"}
+```
+
+`preparing` and `starting` (the shim's own markers) are streamed **once per request** even
+though a multi-case evaluation re-enters them per case; worker-authored `evaluating` /
+`thinking` sub-steps are streamed every time. The `event:` line carries the stage; the
+`data` payload is a self-contained step object (`stage`, `message`, optional `data`,
+`timestamp`).
+
+The stream then ends with exactly one terminal frame — `event: completed` or `event: failed`
+— carrying the endpoint's normal `200` body plus every step that preceded it, and the
+connection closes:
+
+```
+event: completed
+data: {"feedback":[{"awardedPoints":1,"message":"Well done"}],
+       "steps":[{"stage":"preparing","message":"Preparing…","timestamp":"…"},
+                {"stage":"starting","message":"Starting…","timestamp":"…"},
+                {"stage":"evaluating","message":"Ran 3/10 cases","data":{"completed":3,"total":10},"timestamp":"…"}]}
+```
+
+```
+event: failed
+data: {"feedback":null,
+       "steps":[ /* whatever streamed before the failure */ ],
+       "error":{"title":"Evaluation failed",
+                "message":"We couldn't evaluate your answer. Please try again.",
+                "code":"INTERNAL_ERROR",
+                "trace":"worker send: context deadline exceeded"}}
+```
+
+For `/chat` the terminal frame carries `output` (and optional `metadata`) instead of
+`feedback`:
+
+```
+event: completed
+data: {"output":{"role":"ASSISTANT","content":"…"},
+       "metadata":{ /* optional, worker-supplied */ },
+       "steps":[ /* preparing, starting, thinking… */ ]}
+```
+A failed `/chat` frame has `"output":null` plus the same `error` object.
+
+Each element of the terminal frame's `steps[]` is byte-identical to the `data` payload of the
+live frame that carried it. The HTTP status is `200` even for a `failed` frame — the failure
+is in-band. The terminal frame's `data` is the µEd spec's `SseEvaluateTerminalFrame` /
+`SseChatTerminalFrame`; on failure its `error` is a standard `ErrorResponse`. The correlation
+id is in the `X-Request-Id` response header, not the body. Response headers: `Content-Type:
+text/event-stream`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`, no `Content-Length`.
+
+While the request runs, the shim also writes an SSE comment heartbeat (`: ping`) every
+`--progress-stream-heartbeat-seconds` seconds (default `15`; `0` disables) so an idle
+connection isn't dropped by an intermediary.
+
+#### Custom progress events from the evaluation function
+
+The `preparing` and `starting` stages are emitted by shimmy itself, around the worker call as a whole. An evaluation or chat function that does multiple steps internally (e.g. several model calls) can emit its own progress events *during* that span, which are relayed through the same `callbackUrl` (and SSE stream) alongside shimmy's own events.
+
+When a request opts in to progress reporting (via `callbackUrl`), shimmy starts a loopback-only HTTP listener and passes its address to the evaluation function process as the `EVAL_PROGRESS_URL` environment variable, the same way it passes `EVAL_RPC_TRANSPORT`, `EVAL_FILE_NAME_REQUEST`, etc. (see [Communication Channels](#communication-channels) below). This works identically regardless of interface (`rpc` or `file`) or RPC transport, and regardless of the evaluation function's language — it only needs to be able to make an HTTP POST.
+
+To emit a custom event, `POST` a small JSON body to `EVAL_PROGRESS_URL`:
+
+```json
+{
+  "message": "Checking correctness…",
+  "data": { "step": 2, "of": 3 }
+}
+```
+
+- `message` (string, required): student/teacher-facing text.
+- `data` (object, optional): free-form, passed through as-is.
+- There is no `stage` field, by design: a worker can never choose its own stage. The shim assigns one from the command in flight — `evaluating` for an `/evaluate` (or `/preview`) request, `thinking` for `/chat` — and the shim-only stages `preparing`, `starting`, `completed`, and `failed` are never available to a worker.
+
+The response status is informational only — the evaluation function should treat every response as fire-and-forget and never fail on a non-2xx status. Delivery is best-effort, same as outbound callback delivery: `202` accepted (delivery to `callbackUrl` is then attempted in the background), `400` malformed body or empty `message`, `413` body too large, `429` rate limited, `503` no request currently associated with the listener (e.g. a stray POST arriving after both the request has finished and the grace period below has elapsed).
+
+To bound how much an evaluation function (which may be running untrusted, sandboxed code) can push through this channel, events are capped before relay:
+
+| Flag | Env var | Default | Description |
+|------|---------|---------|-------------|
+| `--progress-sidecar-max-body-bytes` | `PROGRESS_SIDECAR_MAX_BODY_BYTES` | `16384` | Maximum size, in bytes, of a single event POST. |
+| `--progress-sidecar-max-events` | `PROGRESS_SIDECAR_MAX_EVENTS` | `50` | Maximum number of events relayed per evaluation. |
+| `--progress-sidecar-burst-size` | `PROGRESS_SIDECAR_BURST_SIZE` | `5` | Events at the start of a span exempt from the minimum spacing below, so a handful of legitimate back-to-back checkpoints aren't rate limited. |
+| `--progress-sidecar-min-event-interval` | `PROGRESS_SIDECAR_MIN_EVENT_INTERVAL` | `10ms` | Minimum spacing between relayed events, once the burst allowance is used up. |
+| `--progress-sidecar-unbind-grace-period` | `PROGRESS_SIDECAR_UNBIND_GRACE_PERIOD` | `250ms` | How long the listener keeps relaying after a request returns, so a fire-and-forget event POST dispatched by the worker just before returning its result still has a window to land. |
+
+> **Sandboxing note:** under `--sandbox` alone, the worker keeps the host network namespace and can reach the loopback listener normally. Only the separate, explicit `--sandbox-disable-network` flag isolates networking (and loopback specifically) — under that flag, custom progress events are silently dropped, the same as any other best-effort delivery failure.
+
+This is a shim-side contract only; no client library ships in this repo. Evaluation function libraries (e.g. per-language toolkits) can build a thin wrapper around reading `EVAL_PROGRESS_URL` and POSTing to it.
+
 ### Communication Channels
 
 The shim supports two interface modes, selected with `--interface`:
@@ -212,6 +434,7 @@ The shim injects the following environment variables into the evaluation functio
 | `EVAL_RPC_HTTP_URL` | HTTP URL (HTTP transport only) |
 | `EVAL_RPC_WS_URL` | WebSocket URL (WS transport only) |
 | `EVAL_RPC_TCP_ADDRESS` | TCP address (TCP transport only) |
+| `EVAL_PROGRESS_URL` | Local URL to POST [custom progress events](#custom-progress-events-from-the-evaluation-function) to (only set when the request opted in via `callbackUrl`) |
 
 #### File System (`--interface file`)
 
@@ -237,6 +460,7 @@ The shim also sets the following environment variables:
 | `EVAL_IO` | `FILE` |
 | `EVAL_FILE_NAME_REQUEST` | Path to the input file |
 | `EVAL_FILE_NAME_RESPONSE` | Path to the output file |
+| `EVAL_PROGRESS_URL` | Local URL to POST [custom progress events](#custom-progress-events-from-the-evaluation-function) to (only set when the request opted in via `callbackUrl`) |
 
 > Using the file interface is recommended for large payloads such as base64-encoded images.
 

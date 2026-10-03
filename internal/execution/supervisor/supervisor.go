@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution/worker"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 type Supervisor interface {
@@ -74,6 +75,11 @@ type Params struct {
 	// is called when the supervisor needs to create a new worker.
 	WorkerFactory WorkerFactoryFn
 
+	// Progress configures worker-authored progress event delivery (the
+	// EVAL_PROGRESS_URL side-channel). Only used when AdapterFactory is
+	// nil, since the default adapter factory is what wires it up.
+	Progress progress.Config
+
 	// Log is the logger to use for the supervisor
 	Log *zap.Logger
 }
@@ -99,7 +105,7 @@ func New(params Params) (Supervisor, error) {
 	}
 
 	if params.AdapterFactory == nil {
-		params.AdapterFactory = defaultAdapterFactory
+		params.AdapterFactory = newDefaultAdapterFactory(params.Progress)
 	}
 
 	createAdapter := func() (*workerRef, error) {
@@ -165,12 +171,49 @@ func (s *WorkerSupervisor) Send(
 
 	worker, err := s.acquireWorker(ctx)
 	if err != nil {
+		progress.Emit(ctx, progress.Event{
+			Stage:   progress.StageFailed,
+			Command: method,
+			Message: "We couldn't start the request. Please try again.",
+			Error:   err.Error(),
+			ErrorInfo: &progress.ErrorInfo{
+				Title:   "Request failed",
+				Message: "We couldn't start the request. Please try again.",
+				Code:    "INTERNAL_ERROR",
+				Trace:   err.Error(),
+			},
+		})
 		return nil, fmt.Errorf("failed to acquire worker: %w", err)
+
 	}
+	progress.Emit(ctx, progress.Event{
+		Stage:   progress.StagePreparing,
+		Command: method,
+		Message: "Preparing…",
+	})
 
 	// NOTICE: unconventional error handling ahead, as we need
 	//         to release the worker before returning the error.
+	progress.Emit(ctx, progress.Event{
+		Stage:   progress.StageStarting,
+		Command: method,
+		Message: "Starting…",
+	})
 	resData, err := worker.Send(ctx, method, data, s.sendParams.Timeout)
+	if err != nil {
+		progress.Emit(ctx, progress.Event{
+			Stage:   progress.StageFailed,
+			Command: method,
+			Message: "Something went wrong. Please try again.",
+			Error:   err.Error(),
+			ErrorInfo: &progress.ErrorInfo{
+				Title:   "Request failed",
+				Message: "Something went wrong. Please try again.",
+				Code:    "INTERNAL_ERROR",
+				Trace:   err.Error(),
+			},
+		})
+	}
 
 	release, releaseErr := s.releaseWorker()
 	if releaseErr != nil {

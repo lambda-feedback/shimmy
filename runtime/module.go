@@ -10,6 +10,9 @@ func Module(config Config) fx.Option {
 		// provide runtime config
 		fx.Supply(config),
 
+		// provide the µEd version adapter registry
+		fx.Provide(DefaultMuEdRegistry),
+
 		// provide runtime
 		fx.Provide(NewLifecycleRuntime),
 

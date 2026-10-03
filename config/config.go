@@ -3,6 +3,7 @@ package config
 import (
 	"time"
 
+	"github.com/lambda-feedback/shimmy/internal/progress"
 	"github.com/lambda-feedback/shimmy/runtime"
 )
 
@@ -29,6 +30,9 @@ type Config struct {
 
 	// Auth is the authentication configuration
 	Auth AuthConfig `conf:"auth"`
+
+	// Progress is the configuration for outbound progress-callback delivery
+	Progress progress.Config `conf:"progress"`
 
 	// StartTimeout is the duration to wait for the application to start.
 	StartTimeout time.Duration `conf:"start_timeout"`

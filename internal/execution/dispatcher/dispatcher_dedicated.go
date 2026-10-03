@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
+	"github.com/lambda-feedback/shimmy/internal/progress"
 )
 
 type DedicatedDispatcher struct {
@@ -30,6 +31,10 @@ type DedicatedDispatcherParams struct {
 
 	// SupervisorFactory is the factory function to create a new supervisor
 	SupervisorFactory SupervisorFactory
+
+	// Progress configures worker-authored progress event delivery,
+	// passed through to the underlying supervisor.
+	Progress progress.Config
 
 	// Log is the logger to use for the dispatcher
 	Log *zap.Logger
@@ -110,8 +115,9 @@ func createSupervisor(
 	params DedicatedDispatcherParams,
 ) (supervisor.Supervisor, error) {
 	return params.SupervisorFactory(supervisor.Params{
-		Context: params.Context,
-		Config:  params.Config.Supervisor,
-		Log:     params.Log,
+		Context:  params.Context,
+		Config:   params.Config.Supervisor,
+		Progress: params.Progress,
+		Log:      params.Log,
 	})
 }
