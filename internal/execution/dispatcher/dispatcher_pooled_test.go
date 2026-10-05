@@ -3,7 +3,6 @@ package dispatcher_test
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -210,8 +209,8 @@ func TestPooledDispatcher_Send_ReleaseSupervisorWaitErrorShutdown(t *testing.T) 
 	_, err := m.Send(context.Background(), "test", data)
 	assert.NoError(t, err)
 
-	// wait for the release to happen in a goroutine
-	<-time.After(1 * time.Millisecond)
+	// wait for the background goroutine to finish by draining the pool
+	m.Shutdown(context.Background())
 
 	assert.Equal(t, 1, waited)
 }
