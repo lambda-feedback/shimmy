@@ -139,10 +139,15 @@ func (h *RuntimeHandler) handle(ctx context.Context, req Request) ([]byte, error
 	}
 
 	var respBody map[string]any
-	err = json.Unmarshal(resData, &respBody)
+	if err := json.Unmarshal(resData, &respBody); err != nil {
+		log.Error("failed to unmarshal response data", zap.Error(err))
+		return nil, err
+	}
+
 	result, ok := respBody["result"].(map[string]interface{})
 	if !ok {
-		log.Error("failed to unmarshal response data", zap.Error(err))
+		err := workerResponseError(respBody)
+		log.Error("evaluation function returned no result", zap.Error(err))
 		return nil, err
 	}
 
@@ -158,6 +163,17 @@ func (h *RuntimeHandler) handle(ctx context.Context, req Request) ([]byte, error
 
 	// Return the response data
 	return resData, nil
+}
+
+// workerResponseError builds an error from a worker response without a result.
+func workerResponseError(respBody map[string]any) error {
+	if errObj, ok := respBody["error"].(map[string]any); ok {
+		if message, ok := errObj["message"].(string); ok && message != "" {
+			return errors.New(message)
+		}
+	}
+
+	return errors.New("invalid response from evaluation function")
 }
 
 func ProcessEval(reqBody map[string]any, result map[string]any, req Request, command Command,

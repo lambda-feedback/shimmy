@@ -2,13 +2,21 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+
+	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
 )
 
 // getErrorStatusCode returns the status code for the given error.
 func getErrorStatusCode(err error) int {
 	if status, ok := wellKnownErrors[err]; ok {
 		return status
+	}
+
+	var invalidSubmissionErr *supervisor.InvalidSubmissionError
+	if errors.As(err, &invalidSubmissionErr) {
+		return http.StatusUnprocessableEntity
 	}
 
 	if err, ok := err.(*validationError); ok && err.Type == validationTypeRequest {
@@ -31,6 +39,13 @@ func newErrorResponse(err error) Response {
 	responseErr := responseError{
 		Message: err.Error(),
 		Fields:  make(map[string][]string),
+	}
+
+	// report only the evaluation function's message, without the
+	// context added while the error travelled up from the worker
+	var invalidSubmissionErr *supervisor.InvalidSubmissionError
+	if errors.As(err, &invalidSubmissionErr) {
+		responseErr.Message = invalidSubmissionErr.Message
 	}
 
 	if validationErr, ok := err.(*validationError); ok {

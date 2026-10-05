@@ -3,6 +3,7 @@ package supervisor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"testing"
 
@@ -166,3 +167,28 @@ func TestStdioAdapter_Stop_WaitForError(t *testing.T) {
 // 	_, err := a.Send(ctx, data, 0)
 // 	assert.ErrorIs(t, err, assert.AnError)
 // }
+
+type fakeRpcError struct {
+	code    int
+	message string
+}
+
+func (e fakeRpcError) Error() string  { return e.message }
+func (e fakeRpcError) ErrorCode() int { return e.code }
+
+func TestRpcSendError_InvalidSubmission(t *testing.T) {
+	err := rpcSendError(fakeRpcError{code: InvalidSubmissionRpcCode, message: "Failed to parse SymPy expression: A/(w*"})
+
+	var invalidErr *InvalidSubmissionError
+	assert.ErrorAs(t, err, &invalidErr)
+	assert.Equal(t, "Failed to parse SymPy expression: A/(w*", invalidErr.Message)
+}
+
+func TestRpcSendError_OtherError(t *testing.T) {
+	rpcErr := fakeRpcError{code: 0, message: "boom"}
+	err := rpcSendError(rpcErr)
+
+	var invalidErr *InvalidSubmissionError
+	assert.False(t, errors.As(err, &invalidErr))
+	assert.ErrorIs(t, err, rpcErr)
+}

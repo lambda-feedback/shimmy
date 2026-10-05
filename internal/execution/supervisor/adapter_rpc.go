@@ -187,10 +187,20 @@ func (a *rpcAdapter) Send(
 	defer cancel()
 
 	if err := a.rpcClient.CallContext(ctx, &result, method, data); err != nil {
-		return nil, fmt.Errorf("error sending rpc request: %w", err)
+		return nil, rpcSendError(err)
 	}
 
 	return map[string]any{"result": result, "command": method}, nil
+}
+
+// rpcSendError converts an rpc call error into the error returned by Send.
+func rpcSendError(err error) error {
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) && rpcErr.ErrorCode() == InvalidSubmissionRpcCode {
+		return &InvalidSubmissionError{Message: rpcErr.Error()}
+	}
+
+	return fmt.Errorf("error sending rpc request: %w", err)
 }
 
 func (a *rpcAdapter) Stop() (ReleaseFunc, error) {
