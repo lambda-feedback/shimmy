@@ -111,6 +111,15 @@ jobs:
           make -C /tmp/nsjail -j$(nproc)
           sudo install -m 0755 /tmp/nsjail/nsjail /usr/sbin/nsjail
 
+      # ubuntu-24.04 images from 20260927 mount binfmt_misc under /proc
+      # (via a systemd automount), which nsjail cannot read-only remount
+      # when using --chroot /.
+      - name: Unmount binfmt_misc
+        run: |
+          sudo systemctl stop proc-sys-fs-binfmt_misc.automount proc-sys-fs-binfmt_misc.mount || true
+          sudo umount -R /proc/sys/fs/binfmt_misc 2>/dev/null || true
+          findmnt -R /proc/sys/fs || true
+
       - name: Run sandbox integration tests
         run: sudo -E go test -v -run 'TestSandboxedWorker|TestApplySandbox' ./internal/execution/worker/...
 
