@@ -426,14 +426,15 @@ func TestSandboxedWorker_RootBind(t *testing.T) {
 	factory, err := worker.NewSandboxedWorkerFactory(worker.SandboxConfig{
 		NsjailPath:    "/usr/sbin/nsjail",
 		ReadOnlyBinds: []string{"/"},
-		// Surface nsjail's mount log in the failure message.
-		Verbose: true,
 	})
 	require.NoError(t, err)
 
+	// /proc/version rather than /proc/self/...: in --mode e the command is not
+	// a member of the new PID namespace nsjail's procfs belongs to, so
+	// /proc/self does not resolve unless disable_clone_newpid is set.
 	w, err := factory(context.Background(), worker.StartConfig{
 		Cmd:  "/bin/cat",
-		Args: []string{"/proc/self/status"},
+		Args: []string{"/proc/version"},
 	}, zap.NewNop())
 	require.NoError(t, err)
 	require.NoError(t, w.Start(context.Background()))
