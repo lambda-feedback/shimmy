@@ -179,16 +179,51 @@ func TestApplySandbox_UnresolvableCommand_ReturnsError(t *testing.T) {
 }
 
 func TestApplySandbox_CwdDefaultsToWorkingDir(t *testing.T) {
+	wd, _ := os.Getwd()
 	out, err := worker.ApplySandboxForTest(
 		worker.StartConfig{Cmd: "/bin/sh"},
-		worker.SandboxConfig{},
+		worker.SandboxConfig{ReadOnlyBinds: []string{wd}},
 	)
 	require.NoError(t, err)
 
 	cwdIdx := indexOf(out.Args, "--cwd")
 	require.NotEqual(t, -1, cwdIdx, "--cwd must default to shimmy's working directory")
-	wd, _ := os.Getwd()
 	assert.Equal(t, wd, out.Args[cwdIdx+1])
+}
+
+func TestApplySandbox_CwdFallbackSkippedWhenNotBound(t *testing.T) {
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{ReadOnlyBinds: []string{"/definitely-not-the-cwd"}},
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, out.Args, "--cwd",
+		"an unbound working directory must not be passed to nsjail, which would fail to chdir")
+}
+
+func TestApplySandbox_NoHostRootChroot(t *testing.T) {
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{},
+	)
+	require.NoError(t, err)
+	assert.NotContains(t, out.Args, "--chroot",
+		"the host root must not be exposed implicitly; only bind mounts are visible")
+}
+
+func TestApplySandbox_RootBindSkipsProc(t *testing.T) {
+	out, err := worker.ApplySandboxForTest(
+		worker.StartConfig{Cmd: "/bin/sh"},
+		worker.SandboxConfig{ReadOnlyBinds: []string{"/"}, WritableBinds: []string{"/tmp"}},
+	)
+	require.NoError(t, err)
+	assert.False(t, containsPair(out.Args, "--bindmount_ro", "/"), "/ must be expanded, not bound whole")
+	assert.False(t, containsPair(out.Args, "--bindmount_ro", "/proc"), "host /proc must not be bound")
+	assert.True(t, containsPair(out.Args, "--bindmount_ro", "/usr"))
+	assert.True(t, containsPair(out.Args, "--bindmount", "/tmp"))
+
+	// The rw /tmp bind must come after the ro root expansion so it wins.
+	assert.Greater(t, indexOf(out.Args, "--bindmount"), indexOf(out.Args, "/usr"))
 }
 
 func TestApplySandbox_Quiet(t *testing.T) {
@@ -350,6 +385,60 @@ func TestSandboxedWorker_FilesystemIsolation(t *testing.T) {
 	exit, err := w.Wait(context.Background())
 	require.NoError(t, err)
 	assert.False(t, exit.Success(), "worker should not be able to read /etc/shadow: %s", exit.String())
+}
+
+// TestSandboxedWorker_UnboundPathInvisible verifies that a world-readable host
+// file is hidden when its directory is not bind-mounted — i.e. confinement
+// comes from the mount namespace, not just file permissions.
+func TestSandboxedWorker_UnboundPathInvisible(t *testing.T) {
+	requireNsjail(t)
+
+	dir, err := os.MkdirTemp("", "sandbox-hidden-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	require.NoError(t, os.Chmod(dir, 0755))
+	hidden := dir + "/visible-on-host.txt"
+	require.NoError(t, os.WriteFile(hidden, []byte("leak\n"), 0644))
+
+	factory, err := worker.NewSandboxedWorkerFactory(worker.SandboxConfig{
+		NsjailPath:    "/usr/sbin/nsjail",
+		ReadOnlyBinds: []string{"/usr", "/bin", "/lib", "/lib64"},
+	})
+	require.NoError(t, err)
+
+	w, err := factory(context.Background(), worker.StartConfig{
+		Cmd:  "/bin/cat",
+		Args: []string{hidden},
+	}, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, w.Start(context.Background()))
+
+	exit, err := w.Wait(context.Background())
+	require.NoError(t, err)
+	assert.False(t, exit.Success(), "unbound world-readable file must not be visible: %s", exit.String())
+}
+
+// TestSandboxedWorker_RootBind verifies that binding "/" works on hosts whose
+// /proc has submounts nsjail cannot remount read-only (binfmt_misc).
+func TestSandboxedWorker_RootBind(t *testing.T) {
+	requireNsjail(t)
+
+	factory, err := worker.NewSandboxedWorkerFactory(worker.SandboxConfig{
+		NsjailPath:    "/usr/sbin/nsjail",
+		ReadOnlyBinds: []string{"/"},
+	})
+	require.NoError(t, err)
+
+	w, err := factory(context.Background(), worker.StartConfig{
+		Cmd:  "/bin/cat",
+		Args: []string{"/proc/self/status"},
+	}, zap.NewNop())
+	require.NoError(t, err)
+	require.NoError(t, w.Start(context.Background()))
+
+	exit, err := w.Wait(context.Background())
+	require.NoError(t, err)
+	assert.True(t, exit.Success(), "ro bind of / should start and see a fresh /proc: %s", exit.String())
 }
 
 // TestSandboxedWorker_CanReadBoundPath verifies that a worker can read a file
