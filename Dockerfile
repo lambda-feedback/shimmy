@@ -1,3 +1,8 @@
+# Pinned nsjail commit. Upstream HEAD (Oct 2026, PR #334) fails closed when
+# remounting submounts such as /proc/sys/fs/binfmt_misc read-only, which
+# breaks --chroot /. Keep in sync with .github/workflows/build.yml.
+ARG NSJAIL_REF=187855988ab77b46846ccb58da5036fc732bd68c
+
 FROM --platform=$BUILDPLATFORM golang:1.25 as builder
 
 WORKDIR /app
@@ -39,7 +44,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth=1 https://github.com/google/nsjail.git /nsjail-src
+ARG NSJAIL_REF
+RUN git init /nsjail-src && \
+    git -C /nsjail-src fetch --depth=1 https://github.com/google/nsjail.git $NSJAIL_REF && \
+    git -C /nsjail-src checkout FETCH_HEAD
 WORKDIR /nsjail-src
 RUN make -j$(nproc)
 
@@ -59,7 +67,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth=1 https://github.com/google/nsjail.git /nsjail-src && \
+ARG NSJAIL_REF
+RUN git init /nsjail-src && \
+    git -C /nsjail-src fetch --depth=1 https://github.com/google/nsjail.git $NSJAIL_REF && \
+    git -C /nsjail-src checkout FETCH_HEAD && \
     make -C /nsjail-src -j$(nproc) && \
     cp /nsjail-src/nsjail /usr/sbin/nsjail
 

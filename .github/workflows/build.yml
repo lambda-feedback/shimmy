@@ -107,7 +107,10 @@ jobs:
             autoconf bison flex g++ git \
             libprotobuf-dev libnl-route-3-dev \
             libtool pkg-config protobuf-compiler
-          git clone --depth=1 https://github.com/google/nsjail.git /tmp/nsjail
+          # Pinned: see NSJAIL_REF in Dockerfile.
+          git init /tmp/nsjail
+          git -C /tmp/nsjail fetch --depth=1 https://github.com/google/nsjail.git 187855988ab77b46846ccb58da5036fc732bd68c
+          git -C /tmp/nsjail checkout FETCH_HEAD
           make -C /tmp/nsjail -j$(nproc)
           sudo install -m 0755 /tmp/nsjail/nsjail /usr/sbin/nsjail
 
