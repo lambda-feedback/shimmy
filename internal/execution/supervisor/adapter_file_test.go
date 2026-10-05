@@ -146,3 +146,36 @@ func createFileAdapter(t *testing.T) (*fileAdapter, *worker.MockWorker) {
 
 	return adapter, w
 }
+
+func TestFileAdapter_Send_ReturnsInvalidSubmissionError(t *testing.T) {
+	w := worker.NewMockWorker(t)
+
+	var sp *worker.StartConfig
+
+	workerFactory := func(params worker.StartConfig) (worker.Worker, error) {
+		sp = &params
+		return w, nil
+	}
+
+	a := &fileAdapter{
+		workerFactory: workerFactory,
+		log:           zap.NewNop(),
+	}
+
+	response := `{"command":"eval","error":{"message":"Failed to parse SymPy expression: A/(w*","code":"INVALID_SUBMISSION"}}`
+
+	w.EXPECT().Start(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+		_ = os.WriteFile(sp.Args[len(sp.Args)-1], []byte(response), os.ModeAppend)
+		return nil
+	})
+	w.EXPECT().ReadPipe().Return(io.NopCloser(strings.NewReader("")), nil)
+	var cell int
+	w.EXPECT().Wait(mock.Anything).Return(worker.ExitEvent{Code: &cell}, nil)
+
+	res, err := a.Send(context.Background(), "eval", map[string]any{}, 10)
+	assert.Nil(t, res)
+
+	var invalidErr *InvalidSubmissionError
+	assert.ErrorAs(t, err, &invalidErr)
+	assert.Equal(t, "Failed to parse SymPy expression: A/(w*", invalidErr.Message)
+}

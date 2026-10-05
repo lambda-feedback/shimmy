@@ -7,6 +7,27 @@ var (
 	ErrUnsupportedIOTransport = errors.New("unsupported io transport")
 )
 
+const (
+	// InvalidSubmissionRpcCode is the JSON-RPC error code an rpc worker
+	// returns when the evaluation function cannot process the submission.
+	InvalidSubmissionRpcCode = 422
+
+	// InvalidSubmissionFileCode is the error code a file worker returns
+	// when the evaluation function cannot process the submission.
+	InvalidSubmissionFileCode = "INVALID_SUBMISSION"
+)
+
+// InvalidSubmissionError is returned when the worker reports that the
+// evaluation function cannot process the submitted response, e.g. due
+// to an unparseable expression.
+type InvalidSubmissionError struct {
+	Message string
+}
+
+func (e *InvalidSubmissionError) Error() string {
+	return e.Message
+}
+
 // IOInterface describes the interface used to communicate with the worker
 type IOInterface string
 

@@ -87,6 +87,29 @@ func (h *MuEdHandler) writeMuEdError(w http.ResponseWriter, version string, stat
 	w.Write(body) //nolint:errcheck
 }
 
+// writeRuntimeError converts a failed runtime response into a muEd error response.
+func (h *MuEdHandler) writeRuntimeError(w http.ResponseWriter, version string, resp runtime.Response) {
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(resp.Body, &body)
+	message := body.Error.Message
+
+	switch resp.StatusCode {
+	case http.StatusUnprocessableEntity:
+		h.writeMuEdError(w, version, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "Unprocessable submission", message, nil)
+	case http.StatusBadRequest:
+		h.writeMuEdError(w, version, http.StatusBadRequest, "VALIDATION_ERROR", "Bad request", message, nil)
+	default:
+		if message == "" {
+			message = "evaluation function failed"
+		}
+		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", message, nil)
+	}
+}
+
 func (h *MuEdHandler) checkAuth(w http.ResponseWriter, r *http.Request) bool {
 	if h.config.Auth.Key != "" && r.Header.Get("api-key") != h.config.Auth.Key {
 		h.log.Debug("unauthorized request", zap.String("path", r.URL.Path))
@@ -161,14 +184,7 @@ func (h *MuEdHandler) ServeEvaluate(w http.ResponseWriter, r *http.Request) {
 	resp := h.handler.Handle(r.Context(), req)
 
 	if resp.StatusCode != http.StatusOK {
-		for k, v := range resp.Header {
-			for _, vv := range v {
-				w.Header().Add(k, vv)
-			}
-		}
-		w.Header().Set(muEdVersionHeader, version)
-		w.WriteHeader(resp.StatusCode)
-		w.Write(resp.Body) //nolint:errcheck
+		h.writeRuntimeError(w, version, resp)
 		return
 	}
 
