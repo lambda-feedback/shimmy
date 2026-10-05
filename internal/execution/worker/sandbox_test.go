@@ -426,6 +426,8 @@ func TestSandboxedWorker_RootBind(t *testing.T) {
 	factory, err := worker.NewSandboxedWorkerFactory(worker.SandboxConfig{
 		NsjailPath:    "/usr/sbin/nsjail",
 		ReadOnlyBinds: []string{"/"},
+		// Surface nsjail's mount log in the failure message.
+		Verbose: true,
 	})
 	require.NoError(t, err)
 
