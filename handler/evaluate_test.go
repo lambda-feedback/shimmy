@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lambda-feedback/shimmy/config"
+	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
 	"github.com/lambda-feedback/shimmy/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -319,6 +320,47 @@ func TestMuEdServeEvaluate_InvalidSubmissionReturnsUnprocessable(t *testing.T) {
 			assert.Equal(t, "VALIDATION_ERROR", body["code"])
 			assert.Equal(t, "Unprocessable submission", body["title"])
 			assert.Equal(t, "Failed to parse SymPy expression: A/(w*", body["message"])
+		})
+	}
+}
+
+func TestMuEdServeEvaluate_RetryableErrorsReturnFailedDependency(t *testing.T) {
+	cases := []struct {
+		name  string
+		err   error
+		code  string
+		title string
+	}{
+		{
+			name:  "upstream timeout",
+			err:   &supervisor.UpstreamError{Message: "Please try again.", Timeout: true},
+			code:  "UPSTREAM_TIMEOUT",
+			title: "Evaluation timed out",
+		},
+		{
+			name:  "upstream unavailable",
+			err:   &supervisor.UpstreamError{Message: "Please try again."},
+			code:  "UPSTREAM_UNAVAILABLE",
+			title: "Evaluation service unavailable",
+		},
+		{
+			name:  "function timeout",
+			err:   &supervisor.FunctionTimeoutError{Message: "Please try again."},
+			code:  "FUNCTION_TIMEOUT",
+			title: "Evaluation timed out",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, body := serveEvaluateError(t, mathEvalBody(t), runtime.NewErrorResponse(tc.err))
+
+			assert.Equal(t, http.StatusFailedDependency, res.StatusCode)
+			assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+			assert.Equal(t, tc.code, body["code"])
+			assert.Equal(t, tc.title, body["title"])
+			assert.Equal(t, "Please try again.", body["message"])
+			assert.Equal(t, map[string]any{"retryable": true}, body["details"])
 		})
 	}
 }

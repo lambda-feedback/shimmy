@@ -45,6 +45,12 @@ func (h *MuEdHandler) ServeChat(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.runtime.Chat(r.Context(), runtime.ChatRequest{Data: reqData})
 	if err != nil {
+		// map known errors the same way as evaluate, but keep internal
+		// error details out of the generic 500 response
+		if errResp := runtime.NewErrorResponse(err); errResp.StatusCode != http.StatusInternalServerError {
+			h.writeRuntimeError(w, version, errResp)
+			return
+		}
 		h.writeMuEdError(w, version, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error", "chat failed", nil)
 		return
 	}

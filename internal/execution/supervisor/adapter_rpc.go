@@ -196,11 +196,36 @@ func (a *rpcAdapter) Send(
 // rpcSendError converts an rpc call error into the error returned by Send.
 func rpcSendError(err error) error {
 	var rpcErr rpc.Error
-	if errors.As(err, &rpcErr) && rpcErr.ErrorCode() == InvalidSubmissionRpcCode {
-		return &InvalidSubmissionError{Message: rpcErr.Error()}
+	if errors.As(err, &rpcErr) {
+		switch rpcErr.ErrorCode() {
+		case InvalidSubmissionRpcCode:
+			return &InvalidSubmissionError{Message: rpcErr.Error()}
+		case UpstreamErrorRpcCode:
+			return &UpstreamError{
+				Message: rpcErr.Error(),
+				Timeout: rpcErrorDataCode(err) == UpstreamTimeoutFileCode,
+			}
+		}
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &FunctionTimeoutError{Message: "The evaluation function did not respond in time."}
 	}
 
 	return fmt.Errorf("error sending rpc request: %w", err)
+}
+
+// rpcErrorDataCode returns the "code" field of an rpc error's data, or ""
+// if the error has no data or the data has no string code.
+func rpcErrorDataCode(err error) string {
+	var dataErr rpc.DataError
+	if !errors.As(err, &dataErr) {
+		return ""
+	}
+
+	data, _ := dataErr.ErrorData().(map[string]any)
+	code, _ := data["code"].(string)
+	return code
 }
 
 func (a *rpcAdapter) Stop() (ReleaseFunc, error) {

@@ -19,6 +19,12 @@ func getErrorStatusCode(err error) int {
 		return http.StatusUnprocessableEntity
 	}
 
+	// upstream failures and worker timeouts are retryable, so they are
+	// reported as 424 rather than 5xx
+	if _, ok := supervisor.RetryableErrorCode(err); ok {
+		return http.StatusFailedDependency
+	}
+
 	if err, ok := err.(*validationError); ok && err.Type == validationTypeRequest {
 		return http.StatusUnprocessableEntity
 	}
@@ -26,14 +32,22 @@ func getErrorStatusCode(err error) int {
 	return http.StatusInternalServerError
 }
 
+// NewErrorResponse creates an error response for an error returned by
+// the runtime, using the same status and body as the runtime handler.
+func NewErrorResponse(err error) Response {
+	return newErrorResponse(err)
+}
+
 // newErrorResponse creates a new error response.
 func newErrorResponse(err error) Response {
 	statusCode := getErrorStatusCode(err)
 
 	type responseError struct {
-		Message string              `json:"message"`
-		Error   string              `json:"error_thrown,omitempty"`
-		Fields  map[string][]string `json:"fields,omitempty"`
+		Message   string              `json:"message"`
+		Error     string              `json:"error_thrown,omitempty"`
+		Fields    map[string][]string `json:"fields,omitempty"`
+		Code      string              `json:"code,omitempty"`
+		Retryable bool                `json:"retryable,omitempty"`
 	}
 
 	responseErr := responseError{
@@ -46,6 +60,12 @@ func newErrorResponse(err error) Response {
 	var invalidSubmissionErr *supervisor.InvalidSubmissionError
 	if errors.As(err, &invalidSubmissionErr) {
 		responseErr.Message = invalidSubmissionErr.Message
+	}
+
+	if code, ok := supervisor.RetryableErrorCode(err); ok {
+		responseErr.Message, _ = supervisor.RetryableErrorMessage(err)
+		responseErr.Code = code
+		responseErr.Retryable = true
 	}
 
 	if validationErr, ok := err.(*validationError); ok {
