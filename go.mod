@@ -1,8 +1,8 @@
 module github.com/lambda-feedback/shimmy
 
-go 1.25.0
+go 1.26.0
 
-toolchain go1.25.14
+toolchain go1.26.10
 
 require (
 	github.com/aws/aws-lambda-go v1.46.0
@@ -19,7 +19,7 @@ require (
 	github.com/urfave/cli/v2 v2.27.5
 	go.uber.org/fx v1.21.0
 	go.uber.org/zap v1.27.0
-	golang.org/x/net v0.58.0
+	golang.org/x/net v0.60.0
 )
 
 require (
@@ -65,8 +65,8 @@ require (
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	go.uber.org/dig v1.17.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/sync v0.23.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
