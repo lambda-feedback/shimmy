@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
 	"github.com/lambda-feedback/shimmy/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -128,6 +130,57 @@ func TestServeChat_RuntimeError(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, w.Result().StatusCode)
 	mockRuntime.AssertExpectations(t)
+}
+
+func TestServeChat_RetryableErrorsReturnFailedDependency(t *testing.T) {
+	cases := []struct {
+		name  string
+		err   error
+		code  string
+		title string
+	}{
+		{
+			name:  "upstream timeout",
+			err:   &supervisor.UpstreamError{Message: "Please try again.", Timeout: true},
+			code:  "UPSTREAM_TIMEOUT",
+			title: "Evaluation timed out",
+		},
+		{
+			name:  "upstream unavailable",
+			err:   &supervisor.UpstreamError{Message: "Please try again."},
+			code:  "UPSTREAM_UNAVAILABLE",
+			title: "Evaluation service unavailable",
+		},
+		{
+			name:  "function timeout",
+			err:   &supervisor.FunctionTimeoutError{Message: "Please try again."},
+			code:  "FUNCTION_TIMEOUT",
+			title: "Evaluation timed out",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockRuntime := new(MockRuntime)
+			mockRuntime.On("Chat", mock.Anything, mock.Anything).
+				Return(runtime.ChatResponse{}, fmt.Errorf("error sending data: %w", tc.err))
+
+			req := httptest.NewRequest(http.MethodPost, "/chat", bytes.NewReader(chatRequestBody(t)))
+			w := httptest.NewRecorder()
+
+			newMuEdHandler(nil, mockRuntime, "").ServeChat(w, req)
+
+			var body map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+
+			assert.Equal(t, http.StatusFailedDependency, w.Result().StatusCode)
+			assert.Equal(t, tc.code, body["code"])
+			assert.Equal(t, tc.title, body["title"])
+			assert.Equal(t, "Please try again.", body["message"])
+			assert.Equal(t, map[string]any{"retryable": true}, body["details"])
+			mockRuntime.AssertExpectations(t)
+		})
+	}
 }
 
 // --- ServeChatHealth tests ---

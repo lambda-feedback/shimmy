@@ -184,11 +184,50 @@ func TestRpcSendError_InvalidSubmission(t *testing.T) {
 	assert.Equal(t, "Failed to parse SymPy expression: A/(w*", invalidErr.Message)
 }
 
+func TestRpcSendError_UpstreamTimeout(t *testing.T) {
+	err := rpcSendError(fakeRpcError{code: UpstreamTimeoutRpcCode, message: "The feedback service took too long to respond. Please try again."})
+
+	var upstreamErr *UpstreamError
+	assert.ErrorAs(t, err, &upstreamErr)
+	assert.True(t, upstreamErr.Timeout)
+	assert.Equal(t, "The feedback service took too long to respond. Please try again.", upstreamErr.Message)
+	assert.Equal(t, UpstreamTimeoutFileCode, upstreamErr.Code())
+}
+
+func TestRpcSendError_UpstreamUnavailable(t *testing.T) {
+	err := rpcSendError(fakeRpcError{code: UpstreamUnavailableRpcCode, message: "The feedback service is temporarily unavailable. Please try again."})
+
+	var upstreamErr *UpstreamError
+	assert.ErrorAs(t, err, &upstreamErr)
+	assert.False(t, upstreamErr.Timeout)
+	assert.Equal(t, "The feedback service is temporarily unavailable. Please try again.", upstreamErr.Message)
+	assert.Equal(t, UpstreamUnavailableFileCode, upstreamErr.Code())
+}
+
+func TestRpcSendError_DeadlineExceeded(t *testing.T) {
+	err := rpcSendError(context.DeadlineExceeded)
+
+	var timeoutErr *FunctionTimeoutError
+	assert.ErrorAs(t, err, &timeoutErr)
+	assert.Equal(t, "The evaluation function did not respond in time.", timeoutErr.Message)
+	assert.Equal(t, FunctionTimeoutCode, timeoutErr.Code())
+}
+
 func TestRpcSendError_OtherError(t *testing.T) {
 	rpcErr := fakeRpcError{code: 0, message: "boom"}
 	err := rpcSendError(rpcErr)
 
 	var invalidErr *InvalidSubmissionError
 	assert.False(t, errors.As(err, &invalidErr))
+	_, retryable := RetryableErrorCode(err)
+	assert.False(t, retryable)
 	assert.ErrorIs(t, err, rpcErr)
+}
+
+func TestRpcSendError_InternalErrorCode(t *testing.T) {
+	err := rpcSendError(fakeRpcError{code: 500, message: "boom"})
+
+	_, retryable := RetryableErrorCode(err)
+	assert.False(t, retryable)
+	assert.ErrorContains(t, err, "error sending rpc request: boom")
 }

@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/lambda-feedback/shimmy/config"
+	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
 	"github.com/lambda-feedback/shimmy/internal/server"
 	"github.com/lambda-feedback/shimmy/runtime"
 )
@@ -92,12 +93,22 @@ func (h *MuEdHandler) writeRuntimeError(w http.ResponseWriter, version string, r
 	var body struct {
 		Error struct {
 			Message string `json:"message"`
+			Code    string `json:"code"`
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(resp.Body, &body)
 	message := body.Error.Message
 
 	switch resp.StatusCode {
+	case http.StatusFailedDependency:
+		code := body.Error.Code
+		title := "Evaluation timed out"
+		if code == supervisor.UpstreamUnavailableFileCode {
+			title = "Evaluation service unavailable"
+		} else if code == "" {
+			code = supervisor.UpstreamTimeoutFileCode
+		}
+		h.writeMuEdError(w, version, http.StatusFailedDependency, code, title, message, map[string]any{"retryable": true})
 	case http.StatusUnprocessableEntity:
 		h.writeMuEdError(w, version, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "Unprocessable submission", message, nil)
 	case http.StatusBadRequest:

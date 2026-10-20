@@ -12,6 +12,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
 	"github.com/lambda-feedback/shimmy/runtime/schema"
 )
 
@@ -229,7 +230,11 @@ func SendCommand(req Request, command Command, h *RuntimeHandler, ctx context.Co
 	// Let the runtime handle the message
 	responseMsg, err := h.runtime.Handle(ctx, requestMsg)
 	if err != nil {
-		log.Error("failed to handle message", zap.Error(err))
+		if code, ok := supervisor.RetryableErrorCode(err); ok {
+			log.Warn("failed to handle message", zap.String("code", code), zap.String("message", err.Error()))
+		} else {
+			log.Error("failed to handle message", zap.Error(err))
+		}
 		return nil, err
 	}
 

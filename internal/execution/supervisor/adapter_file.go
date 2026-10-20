@@ -209,9 +209,17 @@ func (a *fileAdapter) Send(
 		return nil, fmt.Errorf("error decoding response data: %w", err)
 	}
 
-	if errObj, ok := response["error"].(map[string]any); ok && errObj["code"] == InvalidSubmissionFileCode {
+	if errObj, ok := response["error"].(map[string]any); ok {
 		message, _ := errObj["message"].(string)
-		return nil, &InvalidSubmissionError{Message: message}
+
+		switch errObj["code"] {
+		case InvalidSubmissionFileCode:
+			return nil, &InvalidSubmissionError{Message: message}
+		case UpstreamTimeoutFileCode:
+			return nil, &UpstreamError{Message: message, Timeout: true}
+		case UpstreamUnavailableFileCode:
+			return nil, &UpstreamError{Message: message, Timeout: false}
+		}
 	}
 
 	return response, nil
