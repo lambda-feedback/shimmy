@@ -16,24 +16,19 @@ const (
 	// when the evaluation function cannot process the submission.
 	InvalidSubmissionFileCode = "INVALID_SUBMISSION"
 
-	// UpstreamTimeoutRpcCode is the JSON-RPC error code an rpc worker
-	// returns when a service the evaluation function depends on did not
-	// answer in time.
-	UpstreamTimeoutRpcCode = 504
+	// UpstreamErrorRpcCode is the JSON-RPC error code an rpc worker
+	// returns when a service the evaluation function depends on timed out
+	// or failed. The error's data carries the file code below, e.g.
+	// {"code": "UPSTREAM_TIMEOUT"}, to tell the two cases apart.
+	UpstreamErrorRpcCode = 424
 
-	// UpstreamUnavailableRpcCode is the JSON-RPC error code an rpc worker
-	// returns when a service the evaluation function depends on refused
-	// or failed the request.
-	UpstreamUnavailableRpcCode = 503
-
-	// UpstreamTimeoutFileCode is the error code a file worker returns
-	// when a service the evaluation function depends on did not answer
-	// in time.
+	// UpstreamTimeoutFileCode is the error code a worker returns when a
+	// service the evaluation function depends on did not answer in time.
 	UpstreamTimeoutFileCode = "UPSTREAM_TIMEOUT"
 
-	// UpstreamUnavailableFileCode is the error code a file worker returns
-	// when a service the evaluation function depends on refused or failed
-	// the request.
+	// UpstreamUnavailableFileCode is the error code a worker returns when
+	// a service the evaluation function depends on refused or failed the
+	// request.
 	UpstreamUnavailableFileCode = "UPSTREAM_UNAVAILABLE"
 
 	// FunctionTimeoutCode is the error code reported when the worker did
