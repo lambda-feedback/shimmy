@@ -83,6 +83,25 @@ jobs:
 #          name: Go-results
 #          path: TestResults.json
 
+  govulncheck:
+    name: Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: ./go.mod
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
   # TODO: Re-enable. Disabled because nsjail fails to remount
   # /proc/sys/fs/binfmt_misc on ubuntu-24.04 runner image 20260927.
   test-sandbox:
