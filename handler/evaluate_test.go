@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/lambda-feedback/shimmy/config"
+	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
 	"github.com/lambda-feedback/shimmy/runtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -259,29 +260,109 @@ func TestMuEdServeEvaluate_MissingReferenceSolution(t *testing.T) {
 	mockHandler.AssertNotCalled(t, "Handle", mock.Anything, mock.Anything)
 }
 
-func TestMuEdServeEvaluate_WorkerErrorForwarded(t *testing.T) {
-	errorBody, _ := json.Marshal(map[string]any{
-		"error": map[string]any{"message": "evaluation failed"},
+func runtimeErrorResponse(statusCode int, message string) runtime.Response {
+	body, _ := json.Marshal(map[string]any{
+		"error": map[string]any{"message": message},
 	})
-	mockHandler := new(MockHandler)
-	mockHandler.On("Handle", mock.Anything, mock.Anything).Return(runtime.Response{
-		StatusCode: http.StatusInternalServerError,
+	return runtime.Response{
+		StatusCode: statusCode,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       errorBody,
-	})
+		Body:       body,
+	}
+}
 
-	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(mathEvalBody(t)))
+func serveEvaluateError(t *testing.T, reqBody []byte, resp runtime.Response) (*http.Response, map[string]any) {
+	t.Helper()
+	mockHandler := new(MockHandler)
+	mockHandler.On("Handle", mock.Anything, mock.Anything).Return(resp)
+
+	req := httptest.NewRequest(http.MethodPost, "/evaluate", bytes.NewReader(reqBody))
 	w := httptest.NewRecorder()
 
 	newMuEdHandler(mockHandler, nil, "").ServeEvaluate(w, req)
 
 	res := w.Result()
-	defer res.Body.Close()
+	t.Cleanup(func() { res.Body.Close() })
 	raw, _ := io.ReadAll(res.Body)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(raw, &body))
+	return res, body
+}
+
+func TestMuEdServeEvaluate_WorkerErrorReturnsInternalError(t *testing.T) {
+	res, body := serveEvaluateError(t, mathEvalBody(t),
+		runtimeErrorResponse(http.StatusInternalServerError, "boom"))
 
 	assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
 	assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
-	assert.Equal(t, errorBody, bytes.TrimRight(raw, "\n"))
+	assert.Equal(t, "INTERNAL_ERROR", body["code"])
+	assert.Equal(t, "Internal server error", body["title"])
+	assert.Equal(t, "boom", body["message"])
+}
+
+func TestMuEdServeEvaluate_InvalidSubmissionReturnsUnprocessable(t *testing.T) {
+	previewBody, _ := json.Marshal(map[string]any{
+		"submission": map[string]any{
+			"type":    "MATH",
+			"content": map[string]any{"expression": "A/(w*"},
+		},
+		"preSubmissionFeedback": map[string]any{"enabled": true},
+	})
+
+	for name, reqBody := range map[string][]byte{"evaluate": mathEvalBody(t), "preview": previewBody} {
+		t.Run(name, func(t *testing.T) {
+			res, body := serveEvaluateError(t, reqBody,
+				runtimeErrorResponse(http.StatusUnprocessableEntity, "Failed to parse SymPy expression: A/(w*"))
+
+			assert.Equal(t, http.StatusUnprocessableEntity, res.StatusCode)
+			assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+			assert.Equal(t, "VALIDATION_ERROR", body["code"])
+			assert.Equal(t, "Unprocessable submission", body["title"])
+			assert.Equal(t, "Failed to parse SymPy expression: A/(w*", body["message"])
+		})
+	}
+}
+
+func TestMuEdServeEvaluate_RetryableErrorsReturnFailedDependency(t *testing.T) {
+	cases := []struct {
+		name  string
+		err   error
+		code  string
+		title string
+	}{
+		{
+			name:  "upstream timeout",
+			err:   &supervisor.UpstreamError{Message: "Please try again.", Timeout: true},
+			code:  "UPSTREAM_TIMEOUT",
+			title: "Evaluation timed out",
+		},
+		{
+			name:  "upstream unavailable",
+			err:   &supervisor.UpstreamError{Message: "Please try again."},
+			code:  "UPSTREAM_UNAVAILABLE",
+			title: "Evaluation service unavailable",
+		},
+		{
+			name:  "function timeout",
+			err:   &supervisor.FunctionTimeoutError{Message: "Please try again."},
+			code:  "FUNCTION_TIMEOUT",
+			title: "Evaluation timed out",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, body := serveEvaluateError(t, mathEvalBody(t), runtime.NewErrorResponse(tc.err))
+
+			assert.Equal(t, http.StatusFailedDependency, res.StatusCode)
+			assert.Equal(t, "0.1.0", res.Header.Get("X-Api-Version"))
+			assert.Equal(t, tc.code, body["code"])
+			assert.Equal(t, tc.title, body["title"])
+			assert.Equal(t, "Please try again.", body["message"])
+			assert.Equal(t, map[string]any{"retryable": true}, body["details"])
+		})
+	}
 }
 
 // --- ServeHealth tests ---

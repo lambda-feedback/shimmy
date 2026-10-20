@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
 	"github.com/lambda-feedback/shimmy/runtime"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -549,4 +551,139 @@ func TestRunTimeHandler_Invalid_Preview_Incorrect_Args(t *testing.T) {
 	responseErrors := respBody["error"].(map[string]interface{})
 	require.Equal(t, "request validation error", responseErrors["message"])
 
+}
+
+func setupHandlerWithError(t *testing.T, mockErr error) runtime.Handler {
+	mockRT := new(mockRuntime)
+	mockRT.On("Handle", mock.Anything, mock.Anything).Return(runtime.EvaluationResponse(nil), mockErr)
+
+	handler, err := runtime.NewRuntimeHandler(runtime.HandlerParams{
+		Runtime: mockRT,
+		Log:     setupLogger(t),
+	})
+	require.NoError(t, err)
+
+	return handler
+}
+
+func parseErrorMessage(t *testing.T, resp runtime.Response) string {
+	var respBody struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body, &respBody))
+	return respBody.Error.Message
+}
+
+func TestRuntimeHandler_InvalidSubmission_Returns422(t *testing.T) {
+	invalidErr := &supervisor.InvalidSubmissionError{Message: "Failed to parse SymPy expression: A/(w*"}
+	handler := setupHandlerWithError(t, fmt.Errorf("error sending data: %w", invalidErr))
+
+	for _, command := range []string{"eval", "preview"} {
+		t.Run(command, func(t *testing.T) {
+			body := createRequestBody(t, map[string]any{"response": "A/(w*", "answer": "x", "params": map[string]any{}})
+			req := createRequest(http.MethodPost, "/", body, http.Header{"command": []string{command}})
+
+			resp := handler.Handle(context.Background(), req)
+
+			require.Equal(t, http.StatusUnprocessableEntity, resp.StatusCode)
+			require.Equal(t, "Failed to parse SymPy expression: A/(w*", parseErrorMessage(t, resp))
+		})
+	}
+}
+
+func TestRuntimeHandler_UnexpectedError_Returns500(t *testing.T) {
+	handler := setupHandlerWithError(t, errors.New("boom"))
+
+	body := createRequestBody(t, map[string]any{"response": "x+1", "answer": "x"})
+	req := createRequest(http.MethodPost, "/", body, http.Header{"command": []string{"eval"}})
+
+	resp := handler.Handle(context.Background(), req)
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestRuntimeHandler_WorkerErrorWithoutResult_Returns500(t *testing.T) {
+	handler := setupHandlerWithStaticMock(t, runtime.EvaluationResponse{
+		"command": "eval",
+		"error":   map[string]any{"message": "boom"},
+	})
+
+	body := createRequestBody(t, map[string]any{"response": "x+1", "answer": "x"})
+	req := createRequest(http.MethodPost, "/", body, http.Header{"command": []string{"eval"}})
+
+	resp := handler.Handle(context.Background(), req)
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	require.Equal(t, "boom", parseErrorMessage(t, resp))
+}
+
+func TestRuntimeHandler_RetryableErrors_Return424(t *testing.T) {
+	cases := []struct {
+		name    string
+		err     error
+		code    string
+		message string
+	}{
+		{
+			name:    "upstream timeout",
+			err:     &supervisor.UpstreamError{Message: "The feedback service took too long to respond. Please try again.", Timeout: true},
+			code:    "UPSTREAM_TIMEOUT",
+			message: "The feedback service took too long to respond. Please try again.",
+		},
+		{
+			name:    "upstream unavailable",
+			err:     &supervisor.UpstreamError{Message: "The feedback service is temporarily unavailable. Please try again."},
+			code:    "UPSTREAM_UNAVAILABLE",
+			message: "The feedback service is temporarily unavailable. Please try again.",
+		},
+		{
+			name:    "function timeout",
+			err:     &supervisor.FunctionTimeoutError{Message: "The evaluation function did not respond in time."},
+			code:    "FUNCTION_TIMEOUT",
+			message: "The evaluation function did not respond in time.",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := setupHandlerWithError(t, fmt.Errorf("error sending data: %w", tc.err))
+
+			body := createRequestBody(t, map[string]any{"response": "x+1", "answer": "x"})
+			req := createRequest(http.MethodPost, "/", body, http.Header{"command": []string{"eval"}})
+
+			resp := handler.Handle(context.Background(), req)
+
+			require.Equal(t, http.StatusFailedDependency, resp.StatusCode)
+
+			var respBody struct {
+				Error struct {
+					Message   string `json:"message"`
+					Code      string `json:"code"`
+					Retryable bool   `json:"retryable"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(resp.Body, &respBody))
+			require.Equal(t, tc.message, respBody.Error.Message)
+			require.Equal(t, tc.code, respBody.Error.Code)
+			require.True(t, respBody.Error.Retryable)
+		})
+	}
+}
+
+func TestRuntimeHandler_UnexpectedError_OmitsCodeAndRetryable(t *testing.T) {
+	handler := setupHandlerWithError(t, errors.New("boom"))
+
+	body := createRequestBody(t, map[string]any{"response": "x+1", "answer": "x"})
+	req := createRequest(http.MethodPost, "/", body, http.Header{"command": []string{"eval"}})
+
+	resp := handler.Handle(context.Background(), req)
+
+	var respBody struct {
+		Error map[string]any `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(resp.Body, &respBody))
+	require.NotContains(t, respBody.Error, "code")
+	require.NotContains(t, respBody.Error, "retryable")
 }

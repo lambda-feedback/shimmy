@@ -69,7 +69,12 @@ func (m *DedicatedDispatcher) Send(
 ) (map[string]any, error) {
 	res, err := m.supervisor.Send(ctx, method, data)
 	if err != nil {
-		m.log.Error("error sending message", zap.Error(err))
+		// retryable errors don't need a human, so keep them out of ERROR
+		if code, ok := supervisor.RetryableErrorCode(err); ok {
+			m.log.Warn("error sending message", zap.String("code", code), zap.String("message", err.Error()))
+		} else {
+			m.log.Error("error sending message", zap.Error(err))
+		}
 		return nil, fmt.Errorf("error sending data: %w", err)
 	}
 

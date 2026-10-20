@@ -12,6 +12,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	"github.com/lambda-feedback/shimmy/internal/execution/supervisor"
 	"github.com/lambda-feedback/shimmy/runtime/schema"
 )
 
@@ -139,10 +140,15 @@ func (h *RuntimeHandler) handle(ctx context.Context, req Request) ([]byte, error
 	}
 
 	var respBody map[string]any
-	err = json.Unmarshal(resData, &respBody)
+	if err := json.Unmarshal(resData, &respBody); err != nil {
+		log.Error("failed to unmarshal response data", zap.Error(err))
+		return nil, err
+	}
+
 	result, ok := respBody["result"].(map[string]interface{})
 	if !ok {
-		log.Error("failed to unmarshal response data", zap.Error(err))
+		err := workerResponseError(respBody)
+		log.Error("evaluation function returned no result", zap.Error(err))
 		return nil, err
 	}
 
@@ -158,6 +164,17 @@ func (h *RuntimeHandler) handle(ctx context.Context, req Request) ([]byte, error
 
 	// Return the response data
 	return resData, nil
+}
+
+// workerResponseError builds an error from a worker response without a result.
+func workerResponseError(respBody map[string]any) error {
+	if errObj, ok := respBody["error"].(map[string]any); ok {
+		if message, ok := errObj["message"].(string); ok && message != "" {
+			return errors.New(message)
+		}
+	}
+
+	return errors.New("invalid response from evaluation function")
 }
 
 func ProcessEval(reqBody map[string]any, result map[string]any, req Request, command Command,
@@ -213,7 +230,11 @@ func SendCommand(req Request, command Command, h *RuntimeHandler, ctx context.Co
 	// Let the runtime handle the message
 	responseMsg, err := h.runtime.Handle(ctx, requestMsg)
 	if err != nil {
-		log.Error("failed to handle message", zap.Error(err))
+		if code, ok := supervisor.RetryableErrorCode(err); ok {
+			log.Warn("failed to handle message", zap.String("code", code), zap.String("message", err.Error()))
+		} else {
+			log.Error("failed to handle message", zap.Error(err))
+		}
 		return nil, err
 	}
 

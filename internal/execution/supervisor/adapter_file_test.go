@@ -146,3 +146,83 @@ func createFileAdapter(t *testing.T) (*fileAdapter, *worker.MockWorker) {
 
 	return adapter, w
 }
+
+func TestFileAdapter_Send_ReturnsInvalidSubmissionError(t *testing.T) {
+	w := worker.NewMockWorker(t)
+
+	var sp *worker.StartConfig
+
+	workerFactory := func(params worker.StartConfig) (worker.Worker, error) {
+		sp = &params
+		return w, nil
+	}
+
+	a := &fileAdapter{
+		workerFactory: workerFactory,
+		log:           zap.NewNop(),
+	}
+
+	response := `{"command":"eval","error":{"message":"Failed to parse SymPy expression: A/(w*","code":"INVALID_SUBMISSION"}}`
+
+	w.EXPECT().Start(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+		_ = os.WriteFile(sp.Args[len(sp.Args)-1], []byte(response), os.ModeAppend)
+		return nil
+	})
+	w.EXPECT().ReadPipe().Return(io.NopCloser(strings.NewReader("")), nil)
+	var cell int
+	w.EXPECT().Wait(mock.Anything).Return(worker.ExitEvent{Code: &cell}, nil)
+
+	res, err := a.Send(context.Background(), "eval", map[string]any{}, 10)
+	assert.Nil(t, res)
+
+	var invalidErr *InvalidSubmissionError
+	assert.ErrorAs(t, err, &invalidErr)
+	assert.Equal(t, "Failed to parse SymPy expression: A/(w*", invalidErr.Message)
+}
+
+func TestFileAdapter_Send_ReturnsUpstreamError(t *testing.T) {
+	cases := []struct {
+		code    string
+		timeout bool
+	}{
+		{code: UpstreamTimeoutFileCode, timeout: true},
+		{code: UpstreamUnavailableFileCode, timeout: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.code, func(t *testing.T) {
+			w := worker.NewMockWorker(t)
+
+			var sp *worker.StartConfig
+
+			workerFactory := func(params worker.StartConfig) (worker.Worker, error) {
+				sp = &params
+				return w, nil
+			}
+
+			a := &fileAdapter{
+				workerFactory: workerFactory,
+				log:           zap.NewNop(),
+			}
+
+			response := `{"command":"eval","error":{"message":"Please try again.","code":"` + tc.code + `"}}`
+
+			w.EXPECT().Start(mock.Anything).RunAndReturn(func(ctx context.Context) error {
+				_ = os.WriteFile(sp.Args[len(sp.Args)-1], []byte(response), os.ModeAppend)
+				return nil
+			})
+			w.EXPECT().ReadPipe().Return(io.NopCloser(strings.NewReader("")), nil)
+			var cell int
+			w.EXPECT().Wait(mock.Anything).Return(worker.ExitEvent{Code: &cell}, nil)
+
+			res, err := a.Send(context.Background(), "eval", map[string]any{}, 10)
+			assert.Nil(t, res)
+
+			var upstreamErr *UpstreamError
+			assert.ErrorAs(t, err, &upstreamErr)
+			assert.Equal(t, tc.timeout, upstreamErr.Timeout)
+			assert.Equal(t, "Please try again.", upstreamErr.Message)
+			assert.Equal(t, tc.code, upstreamErr.Code())
+		})
+	}
+}

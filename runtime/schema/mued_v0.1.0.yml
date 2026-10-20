@@ -383,6 +383,8 @@ paths:
           $ref: '#/components/responses/403-Forbidden'
         '406':
           $ref: '#/components/responses/406-VersionNotSupported'
+        '422':
+          $ref: '#/components/responses/422-UnprocessableSubmission'
         '500':
           $ref: '#/components/responses/500-InternalError'
         '501':
@@ -1844,6 +1846,30 @@ components:
                   requestedVersion: '0.0'
                   supportedVersions:
                     - 0.1.0
+    422-UnprocessableSubmission:
+      description: The request is valid, but the evaluation function cannot process the submission content (e.g. an unparseable expression).
+      headers:
+        X-Request-Id:
+          description: Request id for tracing this request across services.
+          schema:
+            type: string
+        X-Api-Version:
+          description: The API version that was used to serve this response.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            unprocessableSubmission:
+              summary: Example unprocessable submission error
+              value:
+                title: Unprocessable submission
+                message: 'Failed to parse SymPy expression: A/(w*'
+                code: VALIDATION_ERROR
+                trace: null
+                details: null
     500-InternalError:
       description: Internal server error.
       headers:

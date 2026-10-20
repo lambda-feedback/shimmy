@@ -281,9 +281,14 @@ Enable sandboxing with `--sandbox` and configure it with the flags below:
 
 List-valued `SANDBOX_*` env vars are **comma-separated**, e.g. `SANDBOX_RO_BINDS=/usr,/bin,/lib,/lib64`.
 
+Nothing from the host is visible unless it is bind-mounted; the sandbox root starts
+empty. To expose the whole host read-only, bind `/`: shimmy expands it into one bind
+per top-level directory, skipping `/proc` (nsjail mounts a fresh `/proc` itself, and
+some host `/proc` submounts such as `binfmt_misc` cannot be remounted read-only).
+
 The worker process inherits shimmy's environment (`PATH`, `AWS_*`, …) and, unless
-`--cwd` is set, its working directory — so a sandboxed worker behaves like a
-non-sandboxed one. `nsjail` runs `execve` (not a `PATH` search), but shimmy resolves
+`--cwd` is set, its working directory if that directory is bind-mounted (otherwise
+it starts in `/`) — so a sandboxed worker behaves like a non-sandboxed one. `nsjail` runs `execve` (not a `PATH` search), but shimmy resolves
 the command against `PATH` before handing it over, so a bare `-c python3` still works.
 nsjail's own diagnostics (including cmdline-parse and namespace-setup failures) go to
 shimmy's stderr.

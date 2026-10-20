@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -193,14 +194,17 @@ func (w *ProcessWorker) Start(ctx context.Context) error {
 		close(w.done)
 	}()
 
-	// read from stderr in a separate goroutine
+	// read from stderr in a separate goroutine. every line is forwarded to
+	// the logger as it arrives, while the raw bytes are also accumulated
+	// into w.stderr (via the tee) for the exit-event summary below.
 	w.stderrWg.Add(1)
 	go func() {
 		defer w.stderrWg.Done()
 
-		// read from stderr and save it for later use
 		// TODO: use some prefix / suffix reader as stderr could get big big
-		_, err := io.Copy(&w.stderr, stderrPipe)
+		tee := io.TeeReader(stderrPipe, &w.stderr)
+
+		err := LogPipe(w.log, "stderr", tee)
 		if errors.Is(err, io.EOF) {
 			w.log.Debug("stderr EOF")
 			return
@@ -350,6 +354,20 @@ func getExitEvent(err error, stderr string) ExitEvent {
 		Signal: signo,
 		Stderr: stderr,
 	}
+}
+
+// LogPipe reads newline-delimited data from r and forwards each line to
+// log at debug level, tagged with the given stream name (e.g. "stdout" or
+// "stderr"). It blocks until r is exhausted or a read error occurs, and
+// returns that error (nil on a clean EOF, matching io.Copy semantics).
+func LogPipe(log *zap.Logger, stream string, r io.Reader) error {
+	scanner := bufio.NewScanner(r)
+
+	for scanner.Scan() {
+		log.Debug(stream, zap.String("line", scanner.Text()))
+	}
+
+	return scanner.Err()
 }
 
 // MARK: - Pipes

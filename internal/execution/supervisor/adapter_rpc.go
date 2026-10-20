@@ -116,15 +116,18 @@ func (a *rpcAdapter) Start(
 	params.Env = buildEnv(params.Env, a.config)
 
 	// create the worker
-	worker, err := a.workerFactory(params)
+	childWorker, err := a.workerFactory(params)
 	if err != nil {
 		return fmt.Errorf("error creating worker: %w", err)
 	}
 
-	a.worker = worker
+	a.worker = childWorker
 
-	// initialize the stdio pipe if the transport is "stdio"
 	if a.config.Transport == StdioTransport {
+		// stdout/stdin are claimed as the literal JSON-RPC channel for this
+		// transport, so they must not be logged directly - doing so would
+		// corrupt the protocol framing. only stderr is available as a
+		// diagnostic channel here (handled by the worker itself).
 		stdio, err := a.worker.DuplexPipe()
 		if err != nil {
 			return fmt.Errorf("error creating duplex pipe: %w", err)
@@ -134,11 +137,25 @@ func (a *rpcAdapter) Start(
 		a.stdioPipe = &headerPrefixPipe{stdio: stdio}
 
 		// TODO: close pipe?
+	} else {
+		// for all other transports, stdout isn't used as a protocol
+		// channel, so forward it to the logger instead of letting it
+		// go to /dev/null.
+		stdout, err := a.worker.ReadPipe()
+		if err != nil {
+			return fmt.Errorf("error creating read pipe: %w", err)
+		}
+
+		go func() {
+			if err := worker.LogPipe(a.log, "stdout", stdout); err != nil {
+				a.log.Debug("failed to read from stdout", zap.Error(err))
+			}
+		}()
 	}
 
 	// for rpc, we can already start the worker, as we do not need to pass
 	// any additional, message-specific data to the worker via arguments
-	if err := worker.Start(ctx); err != nil {
+	if err := childWorker.Start(ctx); err != nil {
 		return fmt.Errorf("error starting worker: %w", err)
 	}
 
@@ -170,10 +187,45 @@ func (a *rpcAdapter) Send(
 	defer cancel()
 
 	if err := a.rpcClient.CallContext(ctx, &result, method, data); err != nil {
-		return nil, fmt.Errorf("error sending rpc request: %w", err)
+		return nil, rpcSendError(err)
 	}
 
 	return map[string]any{"result": result, "command": method}, nil
+}
+
+// rpcSendError converts an rpc call error into the error returned by Send.
+func rpcSendError(err error) error {
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		switch rpcErr.ErrorCode() {
+		case InvalidSubmissionRpcCode:
+			return &InvalidSubmissionError{Message: rpcErr.Error()}
+		case UpstreamErrorRpcCode:
+			return &UpstreamError{
+				Message: rpcErr.Error(),
+				Timeout: rpcErrorDataCode(err) == UpstreamTimeoutFileCode,
+			}
+		}
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) {
+		return &FunctionTimeoutError{Message: "The evaluation function did not respond in time."}
+	}
+
+	return fmt.Errorf("error sending rpc request: %w", err)
+}
+
+// rpcErrorDataCode returns the "code" field of an rpc error's data, or ""
+// if the error has no data or the data has no string code.
+func rpcErrorDataCode(err error) string {
+	var dataErr rpc.DataError
+	if !errors.As(err, &dataErr) {
+		return ""
+	}
+
+	data, _ := dataErr.ErrorData().(map[string]any)
+	code, _ := data["code"].(string)
+	return code
 }
 
 func (a *rpcAdapter) Stop() (ReleaseFunc, error) {

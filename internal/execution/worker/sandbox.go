@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -94,15 +96,16 @@ func buildNsjailArgs(config StartConfig, cfg SandboxConfig) []string {
 	}
 	args = append(args, "--user", user)
 
-	// Use the host root as the jail root; bind mounts control what's visible.
-	args = append(args, "--chroot", "/")
+	// No --chroot: nsjail starts from an empty root, so only the bind mounts
+	// below are visible inside the sandbox.
 
 	// Preserve the worker's intended working directory inside the sandbox.
 	// Fall back to shimmy's own cwd so a sandboxed worker starts where a
-	// non-sandboxed one would, instead of nsjail's default "/".
+	// non-sandboxed one would — but only if that directory is bind-mounted,
+	// since nsjail treats a failed chdir as fatal. Otherwise nsjail uses "/".
 	cwd := config.Cwd
 	if cwd == "" {
-		if wd, err := os.Getwd(); err == nil {
+		if wd, err := os.Getwd(); err == nil && isBound(wd, cfg) {
 			cwd = wd
 		}
 	}
@@ -111,12 +114,12 @@ func buildNsjailArgs(config StartConfig, cfg SandboxConfig) []string {
 	}
 
 	// Filesystem: read-only bind mounts.
-	for _, path := range cfg.ReadOnlyBinds {
+	for _, path := range expandBinds(cfg.ReadOnlyBinds) {
 		args = append(args, "--bindmount_ro", path)
 	}
 
 	// Filesystem: read-write bind mounts.
-	for _, path := range cfg.WritableBinds {
+	for _, path := range expandBinds(cfg.WritableBinds) {
 		args = append(args, "--bindmount", path)
 	}
 
@@ -195,4 +198,53 @@ func buildNsjailArgs(config StartConfig, cfg SandboxConfig) []string {
 	args = append(args, config.Args...)
 
 	return args
+}
+
+// expandBinds replaces a bind of the host root "/" with binds of each
+// top-level entry except /proc. nsjail bind-mounts recursively and then
+// remounts every submount read-only; some /proc submounts (e.g.
+// /proc/sys/fs/binfmt_misc on recent Ubuntu) reject that remount, which
+// aborts the jail. nsjail mounts a fresh /proc over that path anyway, so
+// skipping the host's loses nothing.
+func expandBinds(paths []string) []string {
+	var out []string
+	for _, path := range paths {
+		if filepath.Clean(path) != "/" {
+			out = append(out, path)
+			continue
+		}
+		entries, err := os.ReadDir("/")
+		if err != nil {
+			out = append(out, path)
+			continue
+		}
+		for _, e := range entries {
+			if e.Name() == "proc" {
+				continue
+			}
+			full := "/" + e.Name()
+			// Follow symlinks (merged-/usr /bin, /lib, …); skip dangling links
+			// and special files, since a bad bind source is fatal to nsjail.
+			info, err := os.Stat(full)
+			if err != nil || !(info.IsDir() || info.Mode().IsRegular()) {
+				continue
+			}
+			out = append(out, full)
+		}
+	}
+	return out
+}
+
+// isBound reports whether path is visible inside the sandbox through one of
+// the configured read-only or read-write bind mounts.
+func isBound(path string, cfg SandboxConfig) bool {
+	path = filepath.Clean(path)
+	binds := append(append([]string{}, cfg.ReadOnlyBinds...), cfg.WritableBinds...)
+	for _, bind := range expandBinds(binds) {
+		bind = filepath.Clean(bind)
+		if path == bind || strings.HasPrefix(path, bind+"/") {
+			return true
+		}
+	}
+	return false
 }
