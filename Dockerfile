@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH VERSION=$VERSION COMMIT=$COM
 
 # Build nsjail from source. This stage is Linux/amd64 only; nsjail is a
 # Linux kernel feature and does not cross-compile for other OS targets.
-FROM ubuntu:24.04 AS nsjail-builder
+FROM ubuntu:26.04 AS nsjail-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
@@ -66,7 +66,7 @@ RUN git clone --depth=1 https://github.com/google/nsjail.git /nsjail-src && \
 # Runtime image. Cannot use scratch because nsjail requires shared libraries
 # (libcap, libprotobuf, libnl). Image size grows from ~8 MB to ~90-120 MB.
 # When --sandbox is not used, shimmy behaves identically to the scratch image.
-FROM ubuntu:24.04
+FROM ubuntu:26.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libprotobuf32t64 \
