@@ -21,8 +21,10 @@ type LambdaHandlerParams struct {
 	// Config is the configuration for the Lambda handler.
 	Config Config
 
-	// Handlers is a slice of HTTP handlers grouped together.
-	Handlers []*server.HttpHandler `group:"handlers"`
+	// Mux is the shared, fully-wrapped application HTTP handler chain — the same
+	// one the standalone server serves, including OpenAPI request/response
+	// validation.
+	Mux *server.Mux
 
 	// Context is the context for the Lambda handler.
 	Context context.Context
@@ -32,11 +34,11 @@ type LambdaHandlerParams struct {
 }
 
 type LambdaHandler struct {
-	config Config
-	ctx    context.Context
-	cancel context.CancelFunc
-	mux    *http.ServeMux
-	log    *zap.Logger
+	config  Config
+	ctx     context.Context
+	cancel  context.CancelFunc
+	handler http.Handler
+	log     *zap.Logger
 }
 
 // NewLambdaHandler creates a new instance of LambdaHandler
@@ -44,18 +46,12 @@ type LambdaHandler struct {
 func NewLambdaHandler(params LambdaHandlerParams) *LambdaHandler {
 	ctx, cancel := context.WithCancel(params.Context)
 
-	mux := http.NewServeMux()
-
-	for _, handler := range params.Handlers {
-		mux.Handle(handler.Name, handler.Handler)
-	}
-
 	return &LambdaHandler{
-		config: params.Config,
-		ctx:    ctx,
-		cancel: cancel,
-		mux:    mux,
-		log:    params.Logger,
+		config:  params.Config,
+		ctx:     ctx,
+		cancel:  cancel,
+		handler: params.Mux,
+		log:     params.Logger,
 	}
 }
 
@@ -101,11 +97,11 @@ func (s *LambdaHandler) Shutdown() {
 func (s *LambdaHandler) getProxyFunction() (any, error) {
 	switch s.config.ProxySource {
 	case ProxySourceApiGatewayV1:
-		return httpadapter.New(server.NormalizePath(s.mux)).ProxyWithContext, nil
+		return httpadapter.New(s.handler).ProxyWithContext, nil
 	case ProxySourceApiGatewayV2:
-		return httpadapter.NewV2(server.NormalizePath(s.mux)).ProxyWithContext, nil
+		return httpadapter.NewV2(s.handler).ProxyWithContext, nil
 	case ProxySourceAlb:
-		return httpadapter.NewALB(server.NormalizePath(s.mux)).ProxyWithContext, nil
+		return httpadapter.NewALB(s.handler).ProxyWithContext, nil
 	default:
 		return nil, fmt.Errorf("invalid proxy source: %s", s.config.ProxySource)
 	}
